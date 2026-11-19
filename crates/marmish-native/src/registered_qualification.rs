@@ -36,12 +36,14 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
     }
 
     let mut args = args.peekable();
-    let intent = if args.peek().is_some_and(|arg| arg == "--passive-recipient") {
-        args.next();
-        QualificationIntent::PassiveRecipient
-    } else {
-        QualificationIntent::CommandOnly
+    let intent = match args.peek().and_then(|arg| arg.to_str()) {
+        Some("--passive-recipient") => QualificationIntent::PassiveRecipient,
+        Some("--manual-recipient") => QualificationIntent::ManualRecipient,
+        _ => QualificationIntent::CommandOnly,
     };
+    if intent != QualificationIntent::CommandOnly {
+        args.next();
+    }
     let daemon = PathBuf::from(args.next().ok_or_else(missing)?);
     let state_dir = PathBuf::from(args.next().ok_or_else(missing)?);
     let identity = args

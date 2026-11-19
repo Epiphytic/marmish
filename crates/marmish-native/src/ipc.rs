@@ -448,7 +448,6 @@ impl PassiveRegistration {
     target_arch = "x86_64"
 ))]
 impl CandidateListener {
-    #[allow(dead_code, reason = "candidate daemon mount is composed separately")]
     pub(crate) fn registered(
         fatal: crate::dispatcher_fatal::Fatal,
         offer: Option<peer_read_listener::Offer>,

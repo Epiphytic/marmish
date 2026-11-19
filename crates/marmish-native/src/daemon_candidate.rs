@@ -14,7 +14,7 @@ use crate::{
     ipc::{self, Pending, Request, Response},
     mdk_adapter::MdkOwner,
     peer_candidate_startup::{self, Startup},
-    peer_invitation::installed_recipient::{Actor, Completion, Exit, PhysicalEnd},
+    peer_invitation::installed_recipient::{Actor, Completion, Exit, PhysicalEnd, Service},
     peer_relay_trust::candidate_registration::{
         ReceiverPreflight, RegisteredReceiver, RegistrationFailure,
     },
@@ -23,6 +23,7 @@ use crate::{
 use std::{
     future::{Future, poll_fn},
     io::Write,
+    num::NonZeroU64,
     path::Path,
     pin::{Pin, pin},
     sync::Arc,
@@ -56,12 +57,19 @@ struct RegisteredStartup {
 pub(crate) enum QualificationIntent {
     CommandOnly,
     PassiveRecipient,
+    ManualRecipient,
+}
+
+impl QualificationIntent {
+    fn is_recipient(self) -> bool {
+        !matches!(self, Self::CommandOnly)
+    }
 }
 
 struct RegisteredOwner {
     lease: Arc<ProfileLease>,
     receiver: Option<RegisteredReceiver>,
-    recipient_material: Option<IdentityMaterial>,
+    recipient_choice: Option<(QualificationIntent, IdentityMaterial)>,
     recipient: Recipient,
     fatal: Fatal,
     admission: Option<Admission>,
@@ -150,7 +158,7 @@ impl RegisteredStartup {
             fatal: self.receiver.forwarding_verifier().fatal(),
             lease: self.lease,
             receiver: Some(self.receiver),
-            recipient_material: None,
+            recipient_choice: None,
             recipient: Recipient::default(),
             owner: None,
             admission: None,
@@ -199,8 +207,8 @@ impl RegisteredStartup {
                 return Err(Error::Storage("candidate_dispatcher_lost"));
             }
             owner.command_set_lifetime(self.lifetime);
-            if intent == QualificationIntent::PassiveRecipient {
-                selected.recipient_material = Some(self.material);
+            if intent.is_recipient() {
+                selected.recipient_choice = Some((intent, self.material));
             }
             Ok(())
         })();
@@ -219,22 +227,51 @@ impl Recipient {
     fn start(
         &mut self,
         lease: &Arc<ProfileLease>,
-        material: IdentityMaterial,
+        (intent, material): (QualificationIntent, IdentityMaterial),
         receiver: RegisteredReceiver,
-    ) -> Option<ipc::PassiveRegistration> {
+        fatal: &Fatal,
+    ) -> Result<ipc::CandidateListener> {
+        let registered_fatal = receiver.forwarding_verifier().fatal();
+        check_recipient_fatal(fatal, &registered_fatal)?;
         let (startup, registration, worker) = peer_candidate_startup::pair();
-        match Actor::spawn(worker, lease.clone(), material, receiver) {
+        let (listener, service) = match intent {
+            QualificationIntent::PassiveRecipient => (
+                ipc::CandidateListener::passive(
+                    registered_fatal,
+                    ipc::PassiveRegistration {
+                        path: lease.socket_path(),
+                        registration,
+                    },
+                ),
+                Service::Passive,
+            ),
+            QualificationIntent::ManualRecipient => {
+                let Some((offer, producer)) = ipc::peer_read_listener::Offer::new(
+                    lease.socket_path(),
+                    registration,
+                    NonZeroU64::MIN,
+                    registered_fatal.clone(),
+                ) else {
+                    return Ok(ipc::CandidateListener::registered(registered_fatal, None));
+                };
+                (
+                    ipc::CandidateListener::registered(registered_fatal, Some(offer)),
+                    Service::Manual(producer),
+                )
+            }
+            QualificationIntent::CommandOnly => {
+                return Err(Error::Identity("candidate_startup_custody"));
+            }
+        };
+        match Actor::spawn(worker, lease.clone(), material, receiver, service) {
             Ok(actor) => {
                 self.startup = Some(startup);
                 self.actor = Some(actor);
-                Some(ipc::PassiveRegistration {
-                    path: lease.socket_path(),
-                    registration,
-                })
+                Ok(listener)
             }
             Err(_) => {
                 crate::diagnostics::event("registered_recipient", "worker_spawn_failed");
-                None
+                Ok(ipc::CandidateListener::registered(fatal.clone(), None))
             }
         }
     }
@@ -274,6 +311,13 @@ impl Recipient {
     }
 }
 
+fn check_recipient_fatal(fatal: &Fatal, registered_fatal: &Fatal) -> Result<()> {
+    fatal
+        .same_lifetime(registered_fatal)
+        .then_some(())
+        .ok_or(Error::Identity("candidate_startup_custody"))
+}
+
 #[derive(Default)]
 struct Listener {
     drain: Option<oneshot::Sender<()>>,
@@ -285,8 +329,7 @@ impl Listener {
     fn start(
         &mut self,
         lease: &ProfileLease,
-        fatal: &Fatal,
-        passive: Option<ipc::PassiveRegistration>,
+        registered: ipc::CandidateListener,
     ) -> Result<(mpsc::Receiver<Pending>, watch::Sender<Response>)> {
         let listener = ipc::bind(&lease.socket_path())?;
         let (drain, drained) = oneshot::channel();
@@ -294,10 +337,6 @@ impl Listener {
         let (status, snapshots) = watch::channel(Response::success(
             serde_json::json!({"state": "activating"}),
         ));
-        let registered = match passive {
-            Some(registration) => ipc::CandidateListener::passive(fatal.clone(), registration),
-            None => ipc::CandidateListener::registered(fatal.clone(), None),
-        };
         let task = tokio::spawn(async move {
             ipc::serve_with_listener(
                 listener,
@@ -434,17 +473,18 @@ impl RegisteredOwner {
         admit(admission)?;
         #[cfg(test)]
         registered_loss::own_admission(admission);
-        let passive = match self.recipient_material.take() {
-            Some(material) => {
+        let registered_listener = match self.recipient_choice.take() {
+            Some(choice) => {
                 let receiver = self
                     .receiver
                     .take()
                     .ok_or(Error::Identity("candidate_startup_custody"))?;
-                self.recipient.start(&self.lease, material, receiver)
+                self.recipient
+                    .start(&self.lease, choice, receiver, &self.fatal)?
             }
-            None => None,
+            None => ipc::CandidateListener::registered(self.fatal.clone(), None),
         };
-        let (mut requests, status) = listener.start(&self.lease, &self.fatal, passive)?;
+        let (mut requests, status) = listener.start(&self.lease, registered_listener)?;
         let fatal = &self.fatal;
         let mut interrupt = |cx: &mut Context<'_>| {
             if shutdown.as_mut().poll(cx).is_ready() {
@@ -667,7 +707,7 @@ pub(crate) async fn run(
     };
     match select(prepared, connector, eligible)? {
         Selection::Stock(prepared, connector) => {
-            if channel.is_some() || intent == QualificationIntent::PassiveRecipient {
+            if channel.is_some() || intent.is_recipient() {
                 return Err(Error::Invalid("candidate_startup_not_registered"));
             }
             let opened = super::open_stock(

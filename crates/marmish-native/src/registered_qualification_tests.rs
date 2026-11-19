@@ -29,12 +29,26 @@ fn private_arguments_require_explicit_canonical_relay_policy() {
             .intent,
         QualificationIntent::PassiveRecipient
     ));
+    assert!(matches!(
+        arguments(args(&["--manual-recipient"]).chain(args(&base)))
+            .unwrap()
+            .intent,
+        QualificationIntent::ManualRecipient
+    ));
     assert!(arguments(args(&["--unknown"]).chain(args(&base))).is_err());
     assert!(
         arguments(args(&["--passive-recipient", "--passive-recipient"]).chain(args(&base)))
             .is_err()
     );
     assert!(arguments(args(&base).chain(args(&["--passive-recipient"]))).is_err());
+    for flags in [
+        ["--manual-recipient", "--manual-recipient"],
+        ["--manual-recipient", "--passive-recipient"],
+        ["--passive-recipient", "--manual-recipient"],
+    ] {
+        assert!(arguments(args(&flags).chain(args(&base))).is_err());
+    }
+    assert!(arguments(args(&base).chain(args(&["--manual-recipient"]))).is_err());
     assert!(arguments(args(&base[..4])).is_err());
     for (index, replacement) in [
         (0, "marmishd"),

@@ -19,6 +19,17 @@ const DAEMON: &str = "MARMISH_TEST_REGISTERED_QUALIFICATION_DAEMON";
 const STARTUP_MARKER: &str = "MARMISH_INTERNAL_STARTUP";
 const LIMIT: Duration = Duration::from_secs(420);
 
+#[test]
+fn recipient_rejects_a_foreign_fatal_observer() {
+    let (trip, fatal) = crate::dispatcher_fatal::Trip::new();
+    let (_, foreign) = crate::dispatcher_fatal::Trip::new();
+    assert!(check_recipient_fatal(&fatal, &trip.observe()).is_ok());
+    assert!(matches!(
+        check_recipient_fatal(&fatal, &foreign),
+        Err(crate::Error::Identity("candidate_startup_custody"))
+    ));
+}
+
 struct OwnedChild(Child);
 
 impl OwnedChild {

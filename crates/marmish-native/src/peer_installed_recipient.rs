@@ -4,6 +4,7 @@ use super::{receiver_inventory::RecoveredOwner, socket::owner::recipient::PeerRe
 use crate::{
     dispatcher_fatal::Fatal,
     identity::{IdentityMaterial, ProfileLease},
+    ipc::peer_read::pending_view::Producer,
     peer_candidate_startup::{Ready, WorkerStart},
     peer_relay_trust::{
         ReceiverRouteAdmission,
@@ -65,6 +66,11 @@ pub(crate) struct Actor {
     worker: Worker,
 }
 
+pub(crate) enum Service {
+    Passive,
+    Manual(Producer),
+}
+
 enum Worker {
     Owned(JoinHandle<Completion>),
     Joined(Completion),
@@ -79,6 +85,7 @@ impl Actor {
         lease: Arc<ProfileLease>,
         material: IdentityMaterial,
         registration: RegisteredReceiver,
+        service: Service,
     ) -> io::Result<Self> {
         let stop = CancellationToken::new();
         let worker_stop = stop.clone();
@@ -91,7 +98,14 @@ impl Actor {
                         .finalize(&forwarding);
                 };
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    runtime.block_on(run(worker, &lease, &material, registration, &worker_stop))
+                    runtime.block_on(run(
+                        worker,
+                        &lease,
+                        &material,
+                        registration,
+                        &worker_stop,
+                        service,
+                    ))
                 }));
                 result
                     .unwrap_or(Completion::new(Exit::WorkerFailed, PhysicalEnd::Unproved))
@@ -181,6 +195,7 @@ async fn run(
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
     stop: &CancellationToken,
+    service: Service,
 ) -> Completion {
     let forwarding = registration.forwarding_verifier();
     let fatal = forwarding.fatal();
@@ -199,7 +214,7 @@ async fn run(
         forwarding: &forwarding,
         fatal: &fatal,
     };
-    attach(lease, material, registration, fence)
+    attach(lease, material, registration, fence, service)
         .await
         .unwrap_or_else(|exit| Completion::new(exit, PhysicalEnd::NoStart))
 }
@@ -209,6 +224,7 @@ async fn attach(
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
     mut fence: StartupFence<'_>,
+    service: Service,
 ) -> Result<Completion, Exit> {
     #[cfg(test)]
     tests::panic_at("panic_before_attach");
@@ -232,7 +248,7 @@ async fn attach(
     let result = match ReceiverRouteAdmission::registered(token) {
         Ok((admission, drain)) => {
             let result = futures_util::FutureExt::catch_unwind(AssertUnwindSafe(hold_port(
-                admission, &mut owner, &mut fence,
+                admission, &mut owner, &mut fence, service,
             )))
             .await;
             revoke_and_reap(fence.ready, &route, &drain).await;
@@ -250,7 +266,14 @@ async fn hold_port(
     admission: ReceiverRouteAdmission,
     _owner: &mut RecoveredOwner<'_>,
     fence: &mut StartupFence<'_>,
+    service: Service,
 ) -> Exit {
+    // Keep the sole producer inside this future, including while opening the
+    // port. Its drop closes the view before the caller reaps the route.
+    let _producer = match service {
+        Service::Passive => None,
+        Service::Manual(producer) => Some(producer),
+    };
     let deadline = match fence.deadline() {
         Ok(deadline) => deadline,
         Err(exit) => return exit,
@@ -297,7 +320,10 @@ async fn revoke_and_reap(
     drop(ready);
     route.revoke();
     #[cfg(test)]
-    tests::panic_at("panic_in_reap");
+    {
+        tests::panic_at("panic_in_reap");
+        tests::observe_view_before_reap().await;
+    }
     while drain.reap(Instant::now() + DRAIN_WAIT).await.is_err() {
         // A physical reap which cannot be proved leaves this worker alive,
         // with its attached quota, keyed cursor and original profile intact.
@@ -335,15 +361,30 @@ mod tests {
     use nostr::key::Keys;
     use std::{
         fs::{self, OpenOptions},
+        num::NonZeroU64,
         os::unix::fs::{OpenOptionsExt, symlink},
         path::Path,
         process::{Command, Stdio},
+        sync::atomic::{AtomicBool, Ordering},
     };
     use tokio::time::timeout;
 
     const CASE: &str = "MARMISH_TEST_ACTOR_START_CASE";
     const ROOT: &str = "MARMISH_TEST_ACTOR_START_ROOT";
     const RUNTIME_SOCKET: usize = 5;
+    static AT_VIEW_REAP: AtomicBool = AtomicBool::new(false);
+    static RELEASE_VIEW_REAP: AtomicBool = AtomicBool::new(false);
+
+    fn observes_manual_view(case: &str) -> bool {
+        matches!(case, "open_refused" | "preexisting_empty" | "panic_in_hold")
+    }
+
+    pub(super) async fn observe_view_before_reap() {
+        if std::env::var(CASE).is_ok_and(|case| observes_manual_view(&case)) {
+            AT_VIEW_REAP.store(true, Ordering::Release);
+            eventually(|| RELEASE_VIEW_REAP.load(Ordering::Acquire)).await;
+        }
+    }
 
     pub(super) fn panic_at(stage: &str) {
         assert!(
@@ -377,6 +418,7 @@ mod tests {
         for case in [
             "before_ready",
             "stop_during_auth",
+            "open_refused",
             "fatal_after_open",
             "preexisting_empty",
             "sidecar_only",
@@ -490,7 +532,15 @@ mod tests {
             }
             _ => {}
         }
-        let mut actor = Actor::spawn(worker, lease, material, registration).unwrap();
+        let (service, reader) = if observes_manual_view(&case) {
+            let (producer, reader) = crate::ipc::peer_read::pending_view::pair(NonZeroU64::MIN)
+                .expect("one private projection");
+            assert!(reader.admit(NonZeroU64::MIN).is_some());
+            (Service::Manual(producer), Some(reader))
+        } else {
+            (Service::Passive, None)
+        };
+        let mut actor = Actor::spawn(worker, lease, material, registration, service).unwrap();
         assert_eq!(actor.join_before(Instant::now()).await, Err(Incomplete));
 
         let expected = match case.as_str() {
@@ -515,6 +565,12 @@ mod tests {
                 assert_eq!(relay.recipient_requests(account), 0);
                 actor.stop();
                 Exit::Stopped
+            }
+            "open_refused" => {
+                relay.recipient_fault(RecipientFault::NegativeAuthAck);
+                listener.registered();
+                startup.ordinary_ready();
+                Exit::LocalUnavailable
             }
             "panic_before_attach" | "panic_in_hold" => {
                 startup.ordinary_ready();
@@ -549,6 +605,14 @@ mod tests {
             }
             _ => panic!("unknown actor case"),
         };
+        if let Some(reader) = reader {
+            eventually(|| AT_VIEW_REAP.load(Ordering::Acquire)).await;
+            // Listener registration stays alive and holds no view permit.
+            // Inspect the Reader directly, without its readiness or fatal fence.
+            assert!(reader.admit(NonZeroU64::MIN).is_none());
+            assert_eq!(actor.join_before(Instant::now()).await, Err(Incomplete));
+            RELEASE_VIEW_REAP.store(true, Ordering::Release);
+        }
         let physical = match case.as_str() {
             "before_ready" | "sidecar_only" | "malformed" => PhysicalEnd::NoStart,
             "panic_before_attach" | "panic_in_reap" => PhysicalEnd::Unproved,
@@ -568,6 +632,11 @@ mod tests {
                 eventually(|| relay.runtime_socket_end(RUNTIME_SOCKET) == Some(SocketEnd::Raw))
                     .await;
                 assert_eq!(relay.recipient_closes(account), 0);
+            }
+            "open_refused" => {
+                assert_eq!(relay.qualification_connections(), RUNTIME_SOCKET);
+                assert_eq!(relay.recipient_requests(account), 0);
+                assert!(!relay.runtime_socket_active(RUNTIME_SOCKET));
             }
             "panic_before_attach" => {
                 assert!(!cursor.try_exists().unwrap());

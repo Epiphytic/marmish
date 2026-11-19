@@ -96,7 +96,7 @@ async fn command_after_loss(
     .expect("ordinary command after the Peer socket closed");
 }
 
-async fn fresh_passive_recipient() {
+async fn fresh_idle_recipient(mode: &'static str) {
     let example =
         PathBuf::from(std::env::var_os(EXAMPLE).expect("supply the built private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
@@ -129,7 +129,7 @@ async fn fresh_passive_recipient() {
     let ca = root.path().join("fixture-root.der");
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
-    args.insert(0, "--passive-recipient".into());
+    args.insert(0, mode.into());
     drop((lease, identity));
 
     let (mut refused, report, _) = provisional(&example, &args, root.path()).await;
@@ -144,6 +144,7 @@ async fn fresh_passive_recipient() {
 
     let (mut child, mut report, readiness) = provisional(&example, &args, root.path()).await;
     no_recipient_dial(&peer, signer);
+    unavailable(&socket).await;
     assert!(matches!(
         ProfileLease::acquire(root.path(), PROFILE),
         Err(crate::Error::Identity("profile_in_use"))
@@ -242,7 +243,7 @@ async fn fresh_passive_recipient() {
     ordinary.stop().await;
 
     println!(
-        "passive recipient provisional_ready_ms={} hold_ms={} ack_to_peer_ms={} active_command_ms={} post_disconnect_command_ms={} foreground_stop_ms={}",
+        "{mode} provisional_ready_ms={} hold_ms={} ack_to_peer_ms={} active_command_ms={} post_disconnect_command_ms={} foreground_stop_ms={}",
         readiness.as_millis(),
         hold_time.as_millis(),
         peer_startup.as_millis(),
@@ -255,5 +256,15 @@ async fn fresh_passive_recipient() {
 #[test]
 #[ignore = "requires exact installed Linux AMD64 candidate and built private example"]
 fn installed_registered_passive_recipient_and_command() {
-    run_native(LIMIT, || Box::pin(fresh_passive_recipient()));
+    run_native(LIMIT, || {
+        Box::pin(fresh_idle_recipient("--passive-recipient"))
+    });
+}
+
+#[test]
+#[ignore = "requires exact installed Linux AMD64 candidate and built private example"]
+fn installed_registered_idle_manual_recipient_and_command() {
+    run_native(LIMIT, || {
+        Box::pin(fresh_idle_recipient("--manual-recipient"))
+    });
 }

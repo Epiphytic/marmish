@@ -18,10 +18,6 @@ pub(crate) struct Offer {
 }
 
 impl Offer {
-    #[allow(
-        dead_code,
-        reason = "installed actor does not bind the read projection yet"
-    )]
     pub(crate) fn new(
         path: PathBuf,
         registration: ListenerRegistration,
