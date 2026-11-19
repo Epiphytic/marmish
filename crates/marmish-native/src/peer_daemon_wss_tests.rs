@@ -850,6 +850,16 @@ fn peer_daemon_wss_decline_and_expiry_custody() {
 }
 
 async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: &Path) {
+    ordinary_command_with_inventory(socket, remote, relay, cat, 1).await;
+}
+
+async fn ordinary_command_with_inventory(
+    socket: &Path,
+    remote: PublicKey,
+    relay: &Relay,
+    cat: &Path,
+    expected_count: usize,
+) {
     use crate::{
         command_client::CommandHandle,
         command_local::Cursors,
@@ -1043,9 +1053,12 @@ async fn ordinary_command(socket: &Path, remote: PublicKey, relay: &Relay, cat: 
     else {
         panic!("ordinary invocation inventory");
     };
-    assert_eq!(entries.len(), 1);
-    assert!(entries[0].handle == handle);
-    assert!(entries[0].authority_valid);
+    assert_eq!(entries.len(), expected_count);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.handle == handle)
+        .expect("exact ordinary invocation in inventory");
+    assert!(entry.authority_valid);
 }
 
 async fn verify_ordinary_command(round: &Round, socket: &Path) -> crate::mdk_adapter::MdkOwner {

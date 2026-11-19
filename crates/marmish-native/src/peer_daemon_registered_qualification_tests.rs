@@ -369,3 +369,6 @@ async fn fresh_registered_startup() {
 fn installed_registered_fresh_exec_and_command() {
     run_native(LIMIT, fresh_registered_startup);
 }
+
+#[path = "peer_daemon_passive_recipient_wss_tests.rs"]
+mod passive_recipient;

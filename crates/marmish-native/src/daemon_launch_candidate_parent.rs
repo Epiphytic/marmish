@@ -9,16 +9,26 @@ pub(crate) struct RegisteredLaunch {
 
 #[allow(dead_code, reason = "registered qualification mounts independently")]
 pub(crate) fn launch(executable: &Path, argv: &[OsString], log: File) -> Result<RegisteredLaunch> {
+    let (child, channel) = spawn_observed(executable, argv, log)?;
+    Ok(RegisteredLaunch {
+        child,
+        report: read_report(channel, Instant::now() + STARTUP_TIMEOUT),
+    })
+}
+
+/// The integration fixture holds the real inherited channel at provisional R.
+pub(crate) fn spawn_observed(
+    executable: &Path,
+    argv: &[OsString],
+    log: File,
+) -> Result<(Child, UnixStream)> {
     let (mut guard, channel) =
         spawn_child_with_marker(executable, argv, log, CLEANUP_GRACE, None, PRIVATE_MARKER)?;
     let child = guard
         .child
         .take()
         .ok_or_else(|| failure("daemon child unavailable"))?;
-    Ok(RegisteredLaunch {
-        child,
-        report: read_report(channel, Instant::now() + STARTUP_TIMEOUT),
-    })
+    Ok((child, channel))
 }
 
 pub(crate) fn spawn_fault_fixture(

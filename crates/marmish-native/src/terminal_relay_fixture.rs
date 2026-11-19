@@ -1105,6 +1105,18 @@ impl Relay {
         self.state.lock().unwrap().connections.contains_key(&id)
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn retire_recipient_runtime_socket(&self, id: usize, account: PublicKey) {
+        let mut state = self.state.lock().unwrap();
+        assert!(state.qualification && state.recipient_runtime);
+        assert_eq!(state.connections[&id].account, Some(account));
+        retire_connection(&mut state, id);
+    }
+
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     pub(crate) fn recipient_closes(&self, account: PublicKey) -> usize {
         self.state
