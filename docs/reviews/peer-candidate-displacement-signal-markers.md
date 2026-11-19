@@ -1,3 +1,11 @@
 # Status dispatcher abort marker design review
 
 Claude Code Sonnet 5.5 independently reviewed the design in Auto mode. R1 (0bac4bb2-11fe-48b4-a248-40db663c3b17) requested clearer timing interpretation, complete context and tail classification, strict scope, and a process-level test. R2 (d4959347-ed10-4f66-bfba-33cbfedea5d7) approved draft SHA-256 `f3bad7176937841a34befbfba736b1b41debd492fc08a198f0c851260dcb63f3` at base `f301525b7d9d3e4ed56ee2addc247f0fdd3d2fff`. The reviewer approved safe explicit abort with controlled stderr. Implementation must preserve the process-level signal gate, the closed fixed projection, core-dump suppression and the exact size and line boundary tests. The approval does not diagnose the observed dispatcher abort or lift the paired-test gate.
+
+## Implementation reviews
+
+- Claude Code Sonnet 5.5 Auto R1 (`5b84d442-ec1b-4832-9738-a0822b806e8e`) approved exact test-only source `2578a9b`. The follow-up exercises all six markers through the real diagnostics emitter and verifies suppression in the Ready scenario.
+- Auto R2 (`7bd9ce25-e7e0-4b1d-ae08-08ad6f5c1ac4`) approved composed source `c12e65a` and independently ran the exact candidate diagnostic subset. It passed 13 tests, with three ignored child entry points invoked by their parent tests. The reviewer observed that the added outer timeout could not extend the inner two-second deadline.
+- Auto R3 (`f7e8a843-c091-4e48-84dc-abf7c66a931b`) approved the static follow-up at `4dd2dad`. The isolated exit and abort probes now use an effective six-second deadline. Only the stale-socket unit test retries the non-consuming observation within its existing two-second bound. The installed fixture still samples socket state once and uses a two-second child observation window.
+
+[Validation and the unresolved Status abort](../validation/peer-candidate-displacement-signal-markers.md) record which source was exercised.

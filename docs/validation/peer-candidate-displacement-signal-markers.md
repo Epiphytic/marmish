@@ -1,0 +1,16 @@
+# Registered candidate Status abort diagnostics
+
+This is a private Linux AMD64 test fixture for the installed candidate's dispatcher-loss check. It uses separate loopback WSS origins for Peer and Command, disposable identities, and locally receipt-installed candidate and stock binaries. The fixed markers and controller diagnostics compile only in the fixture. They do not qualify any additional installed Peer capability.
+
+## Exact runs
+
+- Source `c12e65a1878066ff39c2e5655ccb7776e5c9104e` used upstream MDK `e4421e86`. Both package installations passed. Locked offline all-target native Clippy with warnings denied passed in candidate and stock builds, in 41.52s and 28.63s respectively. The candidate diagnostic library test link took 48.92s and the stock link took 43.61s. Stock passed all four native layout tests and contained no registered dispatcher-loss selector.
+- Claude independently ran the exact installed candidate diagnostic selector. All 13 parent tests passed in 1.13s, with three child entry points ignored by the general selector and invoked by their parent tests. An author run passed 12 and saw one stale-socket test observe `pending` at a single peek. The actual live diagnostic still peeks once. Test-only source `4dd2dad` lets the deterministic local probe wait for a reset within two seconds and gives the isolated category subprocess an effective six-second exit observation bound. Its code review approved the change; the installed rounds below used the earlier source.
+
+## Installed dispatcher-loss result
+
+The controller exercised the same installed `c12e65a` candidate and stock pair serially. The first round passed in 26.57s. The Ready scenario measured 13,330ms and the Status scenario 13,240ms. On round two Ready passed in 13,372ms. Status failed at the expected `S` sample after 25.01s total. The controller stopped without running round three.
+
+The parent verified the readiness exchange, received an initial Active status, and completed sending the second Status request. It then received EOF on the control channel. The exact Status child terminated by SIGABRT and the stale Status socket reported reset. The bounded log read was complete, with startup context, no recognized refusal, none of the six Status markers, and unclassified text. It did not contain the recognized exact Rust owned-descriptor abort line. The child did not record the second Active selection. This does not establish whether the second request reached the listener branch or a different child thread raised the signal. The file image and VFS replacement occur after that marker.
+
+The controller uses SIGKILL for descendant cleanup only after observing the exact child waitable. It distinguishes a fixture refusal, ordinary exit and observed SIGABRT. The earlier traced run from the baseline passed and did not observe a signal. The cause remains unresolved and the paired passive displacement qualification remains paused. The review record describes the marker projection and isolated tests. [Baseline diagnostics](peer-candidate-displacement-baseline-diagnostics.md) · [Implementation reviews](../reviews/peer-candidate-displacement-signal-markers.md)
