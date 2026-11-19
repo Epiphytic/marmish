@@ -71,11 +71,44 @@ struct Sample {
     tick: Duration,
 }
 
+#[cfg(test)]
+thread_local! {
+    static RETIREMENT_WALL: std::cell::Cell<Option<Sample>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::peer_invitation) fn fixture_retirement_wall<T>(
+    wall: Duration,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RETIREMENT_WALL.set(None);
+        }
+    }
+    let tick = continuous_time().expect("read fixture monotonic time");
+    assert!(
+        RETIREMENT_WALL
+            .replace(Some(Sample { wall, tick }))
+            .is_none()
+    );
+    let _restore = Restore;
+    run()
+}
+
 impl Sample {
     fn now() -> Result<Self> {
+        let tick = continuous_time().map_err(|_| Error::Clock)?;
+        #[cfg(test)]
+        if let Some(anchor) = RETIREMENT_WALL.get() {
+            let elapsed = tick.checked_sub(anchor.tick).ok_or(Error::Clock)?;
+            let wall = anchor.wall.checked_add(elapsed).ok_or(Error::Clock)?;
+            return Ok(Self { wall, tick });
+        }
         Ok(Self {
             wall: Wall::System.sample()?,
-            tick: continuous_time().map_err(|_| Error::Clock)?,
+            tick,
         })
     }
 }

@@ -169,6 +169,12 @@ enum Error {
     Path,
     #[cfg(any(test, marmish_peer_receiver_candidate))]
     StageIdentityMismatch,
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    RetirementBusy,
     Clock,
     Binding,
     Cursor(store::Error),

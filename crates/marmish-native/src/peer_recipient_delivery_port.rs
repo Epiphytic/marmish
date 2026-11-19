@@ -53,6 +53,24 @@ impl PeerRecipientPort {
         self.use_current_native(|route| use_checked(CheckedExpiredRoute { route, expired }))
     }
 
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_foreign_saved_scope(
+        &mut self,
+        expired: ExpiredSaved<'_>,
+    ) -> Result<()> {
+        let scope = &expired.port().0;
+        let distinct = Scope {
+            origin: scope.origin.clone(),
+            recipient: scope.recipient,
+            namespace: scope.namespace,
+            live: std::sync::atomic::AtomicBool::new(true),
+        };
+        self.use_expired_delivery_native(
+            expired.fixture_with_port(SavedPortWitness(Arc::new(distinct))),
+            |_| panic!("a structurally equal foreign scope cannot authorize native work"),
+        )
+    }
+
     pub(in crate::peer_invitation) fn use_saved_delivery<'saved, T>(
         &mut self,
         saved: &'saved SavedDelivery,

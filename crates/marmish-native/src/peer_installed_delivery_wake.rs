@@ -79,6 +79,25 @@ impl Checkpoint {
         ))
     }
 
+    pub(in crate::peer_invitation) fn fixture_retry_metadata(
+        &self,
+        source: &Source,
+        id: EventId,
+        revision: i64,
+        expires: u64,
+    ) -> Result<()> {
+        let cx = self.custody_context(source)?;
+        let updated = self.cursor.conn.execute(
+            "UPDATE peer_cursor_deferred SET revision=?3, expires=?4
+             WHERE origin=?1 AND id=?2 AND auth=2",
+            params![cx.origin, id, revision, seconds(expires)?],
+        )?;
+        if updated != 1 {
+            return Err(Error::Index);
+        }
+        Ok(())
+    }
+
     pub(in crate::peer_invitation) fn fixture_later_retry(
         &self,
         source: &Source,

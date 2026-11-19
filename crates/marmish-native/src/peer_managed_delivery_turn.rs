@@ -5,7 +5,7 @@ use super::store::consent_checkpoint::provisioning::prepared_consent::custody::d
     Observation, Prepared,
     retry::{
         PreparedSaved, SavedDelivery,
-        retirement::{ManagedSaved, Retirement},
+        retirement::{ExpiredSaved, ManagedSaved, Retirement},
     },
 };
 use super::store::consent_checkpoint::{self, Disposition, Status};
@@ -89,6 +89,36 @@ impl<'lease> RecoveredOwner<'lease> {
         readiness: crate::peer_candidate_startup::Readiness,
         stop: Arc<std::sync::atomic::AtomicBool>,
     ) -> Retirement {
+        self.retire_expired_guarded(
+            quota,
+            checked,
+            readiness,
+            stop,
+            #[cfg(test)]
+            || {},
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_retire_expired_before_commit(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        checked: CheckedExpiredRoute<'_, '_>,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        before_commit: impl FnOnce(),
+    ) -> Retirement {
+        self.retire_expired_guarded(quota, checked, readiness, stop, before_commit)
+    }
+
+    fn retire_expired_guarded(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        checked: CheckedExpiredRoute<'_, '_>,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        #[cfg(test)] before_commit: impl FnOnce(),
+    ) -> Retirement {
         let (route, expired) = checked.into_parts();
         if let Err(outcome) =
             expired.check_route(route.account(), route.origin(), route.wall().as_secs())
@@ -100,17 +130,69 @@ impl<'lease> RecoveredOwner<'lease> {
         let Ok(window) = route.window(readiness, stop, u64::MAX) else {
             return Retirement::Transient;
         };
+        self.retire_expired_readback(
+            quota,
+            expired,
+            &window,
+            #[cfg(test)]
+            before_commit,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_retire_expired_at(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        checked: CheckedExpiredRoute<'_, '_>,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        fixture_wall: u64,
+    ) -> Retirement {
+        let (route, expired) = checked.into_parts();
+        if let Err(outcome) = expired.check_route(route.account(), route.origin(), fixture_wall) {
+            return outcome;
+        }
+        let wall = Duration::from_secs(fixture_wall);
+        super::super::native_fence::fixture_retirement_wall(wall, || {
+            let window = NativeWindow::start(
+                readiness,
+                stop,
+                tokio_util::sync::CancellationToken::new(),
+                wall,
+                fixture_wall + 60,
+            )
+            .expect("hermetic bounded retirement window");
+            self.retire_expired_readback(quota, expired, &window, || {})
+        })
+    }
+
+    fn retire_expired_readback(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        expired: ExpiredSaved<'_>,
+        window: &NativeWindow,
+        #[cfg(test)] before_commit: impl FnOnce(),
+    ) -> Retirement {
         let retire = || -> Result<()> {
             self.cursor.unchanged()?;
-            let image = self.read_retirement_image(quota, &expired, &window)?;
+            let image = self.read_retirement_image(quota, &expired, window)?;
             let proof = self.checkpoint.verify_retirement(expired, &image)?;
-            self.recheck_retirement_image(quota, &image, &window)?;
+            self.recheck_retirement_image(quota, &image, window)?;
             self.cursor.unchanged()?;
-            self.checkpoint
-                .finish_retirement(&self.source, proof, &window)?;
+            self.checkpoint.finish_retirement(
+                &self.source,
+                proof,
+                window,
+                &self.cursor,
+                #[cfg(test)]
+                before_commit,
+            )?;
             Ok(())
         };
-        match retire() {
+        let outcome = retire();
+        #[cfg(test)]
+        assert_eq!(window.signs(), 0, "retirement must not sign");
+        match outcome {
             Ok(()) => Retirement::Retired,
             Err(_) if window.sample().is_err() => Retirement::Transient,
             Err(error) => Retirement::failure(error),

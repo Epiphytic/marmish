@@ -241,12 +241,19 @@ impl CheckedFile {
     }
 
     pub(super) fn unchanged(&self) -> Result<()> {
+        self.unchanged_identity()?;
+        check_sidecars(&self.path, &["-journal", "-wal", "-shm"])
+    }
+
+    // A live DELETE transaction owns a transient journal. At its final fence,
+    // check the cursor root and inode while the transaction still holds it.
+    pub(super) fn unchanged_identity(&self) -> Result<()> {
         let dir = self.path.parent().ok_or(Error::Path)?;
         directory(dir)?;
         if inode(&self.path)? != self.before {
             return Err(Error::Path);
         }
-        check_sidecars(&self.path, &["-journal", "-wal", "-shm"])
+        Ok(())
     }
 }
 

@@ -535,7 +535,14 @@ impl<'lease> RecoveredOwner<'lease> {
             } else {
                 files.files().attest_package(permit, operation)
             }
-            .map_err(|_| Error::Path)?;
+            .map_err(|cause| match cause {
+                "dispatch_active_turn" | "dispatch_snapshot_quarantined"
+                    if historical.is_some() =>
+                {
+                    Error::RetirementBusy
+                }
+                _ => Error::Path,
+            })?;
             files.snapshot_closed(self, copy.identity(), fence())?;
             Ok::<_, Error>(read?)
         })();

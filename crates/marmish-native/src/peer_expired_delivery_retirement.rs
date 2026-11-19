@@ -1,7 +1,7 @@
 //! Expired saved Delivery authentication grants deletion of its exact SQL row.
 
 use super::*;
-use crate::peer_invitation::{Error as OwnerError, NativeWindow};
+use crate::peer_invitation::{Error as OwnerError, NativeWindow, paths::CheckedFile};
 use crate::peer_invitation::{
     receiver_inventory::package::RetirementImage, store::retry::RetryProof,
 };
@@ -55,6 +55,21 @@ impl ExpiredSaved<'_> {
 
     pub(in crate::peer_invitation) fn historical_sample(&self) -> HistoricalSample {
         HistoricalSample(self.prior.sample)
+    }
+
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_with_port(mut self, port: SavedPortWitness) -> Self {
+        self.prior.port = port;
+        self
+    }
+
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_after_lifetimes(&self) -> u64 {
+        self.prior
+            .queued
+            .latest_delivery()
+            .max(self.prior.queued.prepared.artifact.expires)
+            + 1
     }
 
     pub(in crate::peer_invitation) fn check_route(
@@ -147,6 +162,8 @@ impl Checkpoint {
         source: &Source,
         verified: VerifiedRetirement<'_>,
         window: &NativeWindow,
+        cursor_file: &CheckedFile,
+        #[cfg(test)] before_commit: impl FnOnce(),
     ) -> Result<()> {
         let VerifiedRetirement {
             saved,
@@ -182,7 +199,14 @@ impl Checkpoint {
                 )?;
                 rows::advance_wall(tx, wall)
             },
-            || retirement_wall(window, wall).map(|_| ()),
+            || {
+                #[cfg(test)]
+                before_commit();
+                cursor_file
+                    .unchanged_identity()
+                    .map_err(|_| CursorError::Binding)?;
+                retirement_wall(window, wall).map(|_| ())
+            },
         )?;
         Ok(())
     }
@@ -220,8 +244,43 @@ impl Retirement {
                 }
                 _ => Self::Stop,
             },
-            OwnerError::Clock => Self::Transient,
+            OwnerError::Clock | OwnerError::RetirementBusy => Self::Transient,
             _ => Self::Stop,
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn expiry_refusals_preserve_corruption_and_reobserve_stale_rows() {
+    use crate::mdk_adapter::peer_native_signer::StageError;
+    use crate::peer_invitation::socket::wire::Failure;
+
+    let cases = [
+        (OwnerError::Path, Retirement::Stop),
+        (OwnerError::StageIdentityMismatch, Retirement::Stop),
+        (OwnerError::Native(StageError::Storage), Retirement::Stop),
+        (OwnerError::Native(StageError::Invalid), Retirement::Stop),
+        (OwnerError::Socket(Failure::Binding), Retirement::Stop),
+        (OwnerError::Checkpoint(Error::Missing), Retirement::Stop),
+        (
+            OwnerError::Checkpoint(Error::ObservedLexicalConflict),
+            Retirement::Stop,
+        ),
+        (
+            OwnerError::Cursor(CursorError::Classification),
+            Retirement::Stop,
+        ),
+        (OwnerError::Cursor(CursorError::Storage), Retirement::Stop),
+        (
+            OwnerError::Cursor(CursorError::Stale),
+            Retirement::Reobserve,
+        ),
+        (OwnerError::Cursor(CursorError::Busy), Retirement::Transient),
+        (OwnerError::Clock, Retirement::Transient),
+        (OwnerError::RetirementBusy, Retirement::Transient),
+    ];
+    for (error, disposition) in cases {
+        assert_eq!(Retirement::failure(error), disposition, "{error:?}");
     }
 }

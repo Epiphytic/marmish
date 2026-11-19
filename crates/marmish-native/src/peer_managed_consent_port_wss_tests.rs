@@ -17,7 +17,7 @@ use crate::{
             wire::CARRIER,
         },
     },
-    peer_quota_vfs::dispatch::welcome_counts,
+    peer_quota_vfs::{dispatch::welcome_counts, stage_native_opens},
 };
 
 #[test]
@@ -37,7 +37,7 @@ fn managed_consent_single_port_private_wss() {
 #[test]
 #[ignore = "opt-in registered signed expired Delivery retirement"]
 fn managed_expired_delivery_private_wss() {
-    run_cases(&["port-expired"]);
+    run_cases(&["port-expired", "port-expired-edge"]);
 }
 
 pub(super) struct Fixture<'a, 'profile> {
@@ -208,6 +208,7 @@ async fn retire_expired(
     mut fixture: Fixture<'_, '_>,
     mut owner: RecoveredOwner<'_>,
     queued: ManagedQueued,
+    past_lifetimes: bool,
 ) {
     let total = Instant::now();
     let (expired_id, cutoff) = fixture.defer_delivery(&mut owner, &queued, true).await;
@@ -223,7 +224,7 @@ async fn retire_expired(
         .unwrap();
     let original = fixture.profile.join("peer/provisional-unknown.db");
     let bytes = fs::read(&original).unwrap();
-    let native = welcome_counts();
+    let native = (welcome_counts(), stage_native_opens());
     let relay_attempts = fixture.relay.publication_attempts(CARRIER);
     let relay_frames = fixture.relay.peer_transcript().len();
     let sleep_deadline = Instant::now() + Duration::from_secs(10);
@@ -239,7 +240,8 @@ async fn retire_expired(
         .unwrap()
         .unwrap()
         .unwrap();
-    let before = owner
+    let initial = owner.recover(wall()).unwrap();
+    let mut before = owner
         .checkpoint
         .fixture_delivery_state(&owner.source)
         .unwrap();
@@ -254,15 +256,32 @@ async fn retire_expired(
         let ManagedSaved::Expired(expired) = observation else {
             panic!("the signed saved Delivery should be expired");
         };
+        assert_eq!(
+            expired.historical_sample().stage_sample().as_secs(),
+            cutoff - 1
+        );
+        assert_eq!(
+            expired.check_route(fixture.founder.public_key(), "", cutoff),
+            Err(Retirement::Stop),
+        );
+        let future_wall = expired.fixture_after_lifetimes();
         fixture
             .port
             .use_expired_delivery_native(expired, |route| {
+                if past_lifetimes {
+                    return owner.fixture_retire_expired_at(
+                        fixture.quota,
+                        route,
+                        fixture.readiness.clone(),
+                        stop,
+                        future_wall,
+                    );
+                }
                 owner.retire_expired_delivery(fixture.quota, route, fixture.readiness.clone(), stop)
             })
             .unwrap()
     };
 
-    // Temporary loss fences the turn, including both floors and exact row.
     let retired_row = owner
         .checkpoint
         .fixture_retry_row(&owner.source, expired_id)
@@ -271,47 +290,249 @@ async fn retire_expired(
         .checkpoint
         .fixture_retry_row(&owner.source, other)
         .unwrap();
-    assert_eq!(
-        retire(&mut fixture, &mut owner, Arc::new(AtomicBool::new(true))),
-        Retirement::Transient
-    );
-    assert_eq!(
+    let stop = Arc::clone(&fixture.stop);
+    if !past_lifetimes {
+        use crate::peer_invitation::{
+            consent_checkpoint::Error as CheckpointError, store::Error as CursorError,
+        };
         owner
+            .checkpoint
+            .fixture_retry_metadata(&owner.source, expired_id, retired_row.1 + 1, cutoff)
+            .unwrap();
+        let stale = fixture
+            .port
+            .use_saved_delivery(&saved, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .err();
+        assert_eq!(
+            stale,
+            Some(Error::Checkpoint(CheckpointError::Cursor(
+                CursorError::Stale
+            )))
+        );
+        owner
+            .checkpoint
+            .fixture_retry_metadata(&owner.source, expired_id, retired_row.1, cutoff - 1)
+            .unwrap();
+        let drift = fixture
+            .port
+            .use_current_recipient(|account, origin, wall| {
+                owner.due_managed_delivery(account, origin, wall)
+            })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let drift_state = owner
             .checkpoint
             .fixture_delivery_state(&owner.source)
-            .unwrap(),
-        before
-    );
-    assert_eq!(
+            .unwrap();
+        let observed = fixture
+            .port
+            .use_saved_delivery(&drift, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .unwrap();
+        let ManagedSaved::Expired(expired) = observed else {
+            panic!("the changed cutoff still classifies as expired");
+        };
+        assert_eq!(
+            fixture
+                .port
+                .use_expired_delivery_native(expired, |route| {
+                    owner.retire_expired_delivery(
+                        fixture.quota,
+                        route,
+                        fixture.readiness.clone(),
+                        Arc::clone(&stop),
+                    )
+                })
+                .unwrap(),
+            Retirement::Stop
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            drift_state
+        );
         owner
             .checkpoint
-            .fixture_retry_row(&owner.source, expired_id)
-            .unwrap(),
-        retired_row
-    );
-
-    change_image(&original, 0, bytes[0] ^ 1);
-    let stop = fixture.stop.clone();
-    assert_eq!(
-        retire(&mut fixture, &mut owner, stop.clone()),
-        Retirement::Stop
-    );
-    change_image(&original, 0, bytes[0]);
-    assert_eq!(
-        owner
+            .fixture_retry_metadata(&owner.source, expired_id, retired_row.1, cutoff)
+            .unwrap();
+        before = owner
             .checkpoint
             .fixture_delivery_state(&owner.source)
-            .unwrap(),
-        before
-    );
-    assert_eq!(
-        owner
-            .checkpoint
-            .fixture_retry_row(&owner.source, expired_id)
-            .unwrap(),
-        retired_row
-    );
+            .unwrap();
+        assert_eq!(
+            retire(&mut fixture, &mut owner, Arc::new(AtomicBool::new(true))),
+            Retirement::Transient
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_retry_row(&owner.source, expired_id)
+                .unwrap(),
+            retired_row
+        );
 
+        let saved_stage = original.with_extension("held-out");
+        fs::rename(&original, &saved_stage).unwrap();
+        assert_eq!(
+            retire(&mut fixture, &mut owner, Arc::clone(&stop)),
+            Retirement::Stop
+        );
+        fs::rename(saved_stage, &original).unwrap();
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before,
+        );
+
+        change_image(&original, 0, bytes[0] ^ 1);
+        assert_eq!(
+            retire(&mut fixture, &mut owner, Arc::clone(&stop)),
+            Retirement::Stop
+        );
+        change_image(&original, 0, bytes[0]);
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_retry_row(&owner.source, expired_id)
+                .unwrap(),
+            retired_row
+        );
+
+        let observed = fixture
+            .port
+            .use_saved_delivery(&saved, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .unwrap();
+        let ManagedSaved::Expired(expired) = observed else {
+            panic!("the saved row should still be expired");
+        };
+        assert_eq!(
+            fixture.port.fixture_foreign_saved_scope(expired),
+            Err(crate::peer_invitation::socket::wire::Failure::Binding),
+        );
+        let later_limit = Instant::now() + Duration::from_secs(2);
+        while wall() <= u64::try_from(before[2]).unwrap() {
+            assert!(Instant::now() < later_limit);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let observed = fixture
+            .port
+            .use_saved_delivery(&saved, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .unwrap();
+        let ManagedSaved::Expired(expired) = observed else {
+            panic!("the saved row should still be expired");
+        };
+        let halt = Arc::new(AtomicBool::new(false));
+        let mut reached = false;
+        let before_commit = fixture
+            .port
+            .use_expired_delivery_native(expired, |route| {
+                owner.fixture_retire_expired_before_commit(
+                    fixture.quota,
+                    route,
+                    fixture.readiness.clone(),
+                    halt.clone(),
+                    || {
+                        reached = true;
+                        halt.store(true, Ordering::Release);
+                    },
+                )
+            })
+            .unwrap();
+        assert!(
+            reached,
+            "the stop cut must follow the DELETE and both tentative clock updates"
+        );
+        assert_eq!(before_commit, Retirement::Transient);
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_retry_row(&owner.source, expired_id)
+                .unwrap(),
+            retired_row
+        );
+        let observed = fixture
+            .port
+            .use_saved_delivery(&saved, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .unwrap();
+        let ManagedSaved::Expired(expired) = observed else {
+            panic!("the saved row should still be expired");
+        };
+        let cursor = owner.cursor.path().to_owned();
+        let held_cursor = cursor.with_extension("held-out");
+        let mut moved = false;
+        let refused = fixture
+            .port
+            .use_expired_delivery_native(expired, |route| {
+                owner.fixture_retire_expired_before_commit(
+                    fixture.quota,
+                    route,
+                    fixture.readiness.clone(),
+                    Arc::clone(&stop),
+                    || {
+                        fs::rename(&cursor, &held_cursor).unwrap();
+                        moved = true;
+                    },
+                )
+            })
+            .unwrap();
+        assert!(moved);
+        fs::rename(held_cursor, cursor).unwrap();
+        assert_eq!(refused, Retirement::Stop);
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_delivery_state(&owner.source)
+                .unwrap(),
+            before
+        );
+        assert_eq!(
+            owner
+                .checkpoint
+                .fixture_retry_row(&owner.source, expired_id)
+                .unwrap(),
+            retired_row,
+        );
+    }
     let measured = Instant::now();
     assert_eq!(retire(&mut fixture, &mut owner, stop), Retirement::Retired);
     let elapsed = measured.elapsed();
@@ -337,16 +558,23 @@ async fn retire_expired(
             .unwrap(),
         other_row
     );
-    let next = fixture
-        .port
-        .use_current_recipient(|account, origin, wall| {
-            owner.due_managed_delivery(account, origin, wall)
-        })
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(next.fixture_id(), other);
-    assert_eq!(welcome_counts(), native);
+    if !past_lifetimes {
+        let next = fixture
+            .port
+            .use_current_recipient(|account, origin, wall| {
+                owner.due_managed_delivery(account, origin, wall)
+            })
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.fixture_id(), other);
+    } else {
+        assert!(after[2] > before[2] + 300);
+    }
+    let inventory = owner.recover(u64::try_from(after[2]).unwrap()).unwrap();
+    assert_eq!(inventory.charged, initial.charged);
+    assert_eq!(inventory.extents, initial.extents);
+    assert_eq!((welcome_counts(), stage_native_opens()), native);
     assert_eq!(fixture.relay.publication_attempts(CARRIER), relay_attempts);
     assert_eq!(fixture.relay.peer_transcript().len(), relay_frames);
     assert_eq!(fs::read(&original).unwrap(), bytes);
@@ -373,8 +601,8 @@ pub(super) async fn run<'profile>(
     queued: ManagedQueued,
     reopen: impl FnOnce() -> RecoveredOwner<'profile>,
 ) {
-    if case == "expired" {
-        retire_expired(fixture, owner, queued).await;
+    if matches!(case, "expired" | "expired-edge") {
+        retire_expired(fixture, owner, queued, case == "expired-edge").await;
         return;
     }
     let native = welcome_counts();

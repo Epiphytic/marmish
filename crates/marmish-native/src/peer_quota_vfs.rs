@@ -37,6 +37,16 @@ const ATOMIC_CAPABILITIES: c_int = sql::SQLITE_IOCAP_ATOMIC
     | sql::SQLITE_IOCAP_BATCH_ATOMIC;
 
 #[cfg(test)]
+thread_local! {
+    static STAGE_NATIVE_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn stage_native_opens() -> usize {
+    STAGE_NATIVE_OPENS.get()
+}
+
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 pub(super) struct Evidence {
     pub(super) peak: u64,
@@ -571,6 +581,12 @@ unsafe fn open_managed(
             #[cfg(test)]
             {
                 state.evidence.database_opens += 1;
+                if quota.files[0]
+                    .file_name()
+                    .is_some_and(|name| dispatch::NAMES.iter().any(|stage| name == *stage))
+                {
+                    STAGE_NATIVE_OPENS.set(STAGE_NATIVE_OPENS.get() + 1);
+                }
             }
         }
         outer.cast::<Handle>().write(handle);

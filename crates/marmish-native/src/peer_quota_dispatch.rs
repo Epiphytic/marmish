@@ -27,7 +27,7 @@ pub(crate) const CLOSED_STAGE_LIMIT: u64 = 16 * 1024 * 1024;
 // The 128 MiB admission in the pending activation design. No production quota
 // owner exists at this revision; the proof fixture supplies the other charges.
 pub(crate) const TOTAL_ADMISSION: u64 = 128 * 1024 * 1024;
-const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
+pub(super) const NAMES: [&str; 2] = ["provisional-known.db", "provisional-unknown.db"];
 #[cfg(any(test, marmish_peer_receiver_candidate))]
 const SNAPSHOT: usize = NAMES.len();
 #[cfg(test)]
@@ -387,6 +387,14 @@ impl ReceiverQuota<'_> {
             return Err("dispatch_active_turn");
         }
         let slot = &mut slots[index];
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if slot.quarantined && main.ends_with(RECEIVER_SNAPSHOT_NAME) {
+            return Err("dispatch_snapshot_quarantined");
+        }
         if slot.quarantined
             || (index < NAMES.len()
                 && (slot.generation.is_some_and(|current| generation < current)
