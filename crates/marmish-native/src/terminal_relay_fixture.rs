@@ -228,18 +228,6 @@ impl State {
                     "invalid: event size exceeds 65536 bytes"
                 };
                 self.observe(Observation::Write(event.id, kind, accepted));
-                #[cfg(all(
-                    marmish_peer_receiver_candidate,
-                    target_os = "linux",
-                    target_arch = "x86_64"
-                ))]
-                if accepted
-                    && kind == 30443
-                    && let Some(sockets) = &mut self.dispatcher_connections
-                    && let Some(socket) = sockets.get_mut(&connection)
-                {
-                    socket.key_package = true;
-                }
                 return Some(json!(["OK", event.id, accepted, reason]));
             }
         }
@@ -282,6 +270,18 @@ impl State {
         }
         let accepted = accepted && !reject;
         self.observe(Observation::Write(event.id, kind, accepted));
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if accepted
+            && kind == 30443
+            && let Some(sockets) = &mut self.dispatcher_connections
+            && let Some(socket) = sockets.get_mut(&connection)
+        {
+            socket.key_package = true;
+        }
         if accepted
             && self.acknowledge_duplicates
             && self.publications.iter().any(|stored| stored.id == event.id)
