@@ -54,72 +54,135 @@ struct Opened {
     )>,
 }
 
+struct LoadedProfile {
+    lease: ProfileLease,
+    origin: crate::command_limits::ServiceLifetime,
+    backend: BackendChoice,
+    helper: PathBuf,
+    policy: RelayPolicy,
+    peers: Vec<String>,
+    retention: Duration,
+    commands: Option<crate::command_config::CommandConfig>,
+}
+
+struct PreparedProfile {
+    loaded: LoadedProfile,
+    material: crate::identity::IdentityMaterial,
+}
+
+impl LoadedProfile {
+    fn load(config: Config, origin: crate::command_limits::ServiceLifetime) -> Result<Self> {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&config.state_dir)?;
+        let profile = ProfileLease::acquire(&config.state_dir, &config.identity)?;
+        let mut commands = match std::fs::symlink_metadata(profile.root().join("config.json")) {
+            Ok(_) => Some(crate::command_config::CommandConfig::load(profile.root())?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(commands) = &mut commands {
+            commands.apply_limit_overrides(crate::command_limits::LimitOverrides {
+                max_commands: config.max_commands,
+                max_uptime: config.max_uptime,
+            })?;
+        } else if config.max_commands.is_some() || config.max_uptime.is_some() {
+            return Err(Error::Invalid("commands_disabled"));
+        }
+        let mut peers = config.allowed_peers;
+        if let Some(commands) = &commands {
+            if commands.relay_policy().urls() != config.relay_policy.urls()
+                || commands.relay_policy().mode() != config.relay_policy.mode()
+            {
+                return Err(Error::Invalid("command_runtime_binding"));
+            }
+            peers.extend(
+                commands
+                    .trusted_remotes()
+                    .iter()
+                    .chain(commands.execution_clients())
+                    .map(hex::encode),
+            );
+            peers.sort();
+            peers.dedup();
+        }
+        Ok(Self {
+            lease: profile,
+            origin,
+            backend: config.backend,
+            helper: config.helper,
+            policy: config.relay_policy,
+            peers,
+            retention: config.retention,
+            commands,
+        })
+    }
+
+    fn prepare(mut self) -> Result<PreparedProfile> {
+        let material = self.lease.prepare(
+            self.backend,
+            &self.helper,
+            std::time::Instant::now() + Duration::from_secs(30),
+        )?;
+        Ok(PreparedProfile {
+            loaded: self,
+            material,
+        })
+    }
+}
+
+impl PreparedProfile {
+    fn relay_connector(&self) -> Result<RelayConnector> {
+        RelayConnector::new(
+            self.loaded.policy.clone(),
+            ArtiDirs {
+                state: self.loaded.lease.arti_state().to_owned(),
+                cache: self.loaded.lease.arti_cache().to_owned(),
+            },
+        )
+    }
+}
+
 async fn open_inner(
     config: Config,
     terminal: bool,
     #[cfg(test)] fixture: Option<FixtureTransport<'_>>,
 ) -> Result<Opened> {
     let origin = crate::command_limits::ServiceLifetime::start(None)?;
-    let (mut profile, material, policy, peers, retention, commands) =
-        tokio::task::spawn_blocking(move || {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&config.state_dir)?;
-            let mut profile = ProfileLease::acquire(&config.state_dir, &config.identity)?;
-            let mut commands = match std::fs::symlink_metadata(profile.root().join("config.json")) {
-                Ok(_) => Some(crate::command_config::CommandConfig::load(profile.root())?),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            };
-            if let Some(commands) = &mut commands {
-                commands.apply_limit_overrides(crate::command_limits::LimitOverrides {
-                    max_commands: config.max_commands,
-                    max_uptime: config.max_uptime,
-                })?;
-            } else if config.max_commands.is_some() || config.max_uptime.is_some() {
-                return Err(Error::Invalid("commands_disabled"));
-            }
-            let mut peers = config.allowed_peers;
-            if let Some(commands) = &commands {
-                if commands.relay_policy().urls() != config.relay_policy.urls()
-                    || commands.relay_policy().mode() != config.relay_policy.mode()
-                {
-                    return Err(Error::Invalid("command_runtime_binding"));
-                }
-                peers.extend(
-                    commands
-                        .trusted_remotes()
-                        .iter()
-                        .chain(commands.execution_clients())
-                        .map(hex::encode),
-                );
-                peers.sort();
-                peers.dedup();
-            }
-            let material = profile.prepare(
-                config.backend,
-                &config.helper,
-                std::time::Instant::now() + Duration::from_secs(30),
-            )?;
-            Ok::<_, Error>((
-                profile,
-                material,
-                config.relay_policy,
+    let prepared =
+        tokio::task::spawn_blocking(move || LoadedProfile::load(config, origin)?.prepare())
+            .await
+            .map_err(|_| Error::Identity("initialization_worker"))??;
+    let connector = prepared.relay_connector()?;
+    open_stock(
+        prepared,
+        connector,
+        terminal,
+        #[cfg(test)]
+        fixture,
+    )
+}
+
+fn open_stock(
+    prepared: PreparedProfile,
+    connector: RelayConnector,
+    terminal: bool,
+    #[cfg(test)] fixture: Option<FixtureTransport<'_>>,
+) -> Result<Opened> {
+    let PreparedProfile {
+        loaded:
+            LoadedProfile {
+                lease: mut profile,
+                origin,
+                policy,
                 peers,
-                config.retention,
+                retention,
                 commands,
-            ))
-        })
-        .await
-        .map_err(|_| Error::Identity("initialization_worker"))??;
-    let connector = RelayConnector::new(
-        policy.clone(),
-        ArtiDirs {
-            state: profile.arti_state().to_owned(),
-            cache: profile.arti_cache().to_owned(),
-        },
-    )?;
+                ..
+            },
+        material,
+    } = prepared;
     #[cfg(test)]
     let connector = match fixture
         .as_ref()
