@@ -95,7 +95,7 @@ pub(crate) use receiver_inventory::v2_pending::PendingObservation;
 ))]
 pub(crate) use receiver_inventory::{
     CleanPermit,
-    package::{PackageOperation, SchemaOperation},
+    package::{PackageOperation, RetirementPackageOperation, SchemaOperation},
 };
 #[cfg(all(
     any(test, marmish_peer_receiver_candidate),

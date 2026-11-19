@@ -48,6 +48,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Error {
     Storage,
+    Busy,
     Binding,
     Range,
     ClockRegressed,
@@ -60,8 +61,13 @@ pub(crate) enum Error {
 }
 
 impl From<rusqlite::Error> for Error {
-    fn from(_: rusqlite::Error) -> Self {
-        Self::Storage
+    fn from(error: rusqlite::Error) -> Self {
+        match error.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+                Self::Busy
+            }
+            _ => Self::Storage,
+        }
     }
 }
 

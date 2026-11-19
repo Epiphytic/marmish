@@ -184,7 +184,7 @@ mod delivery;
     target_arch = "x86_64"
 ))]
 pub(in crate::peer_invitation) use delivery::{
-    CheckedDeliveryRoute, CheckedSavedDelivery, SavedPortWitness,
+    CheckedDeliveryRoute, CheckedExpiredRoute, CheckedSavedDelivery, SavedPortWitness,
 };
 
 pub(in crate::peer_invitation) struct CheckedAck<'a> {

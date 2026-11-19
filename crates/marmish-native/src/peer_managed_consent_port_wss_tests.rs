@@ -2,6 +2,7 @@ use nostr::event::EventId;
 use sha2::{Digest, Sha256};
 
 use super::*;
+use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::retry::retirement::{ManagedSaved, Retirement};
 use crate::{
     mdk_adapter::{
         peer_staged_proof_tests::peer_enrollment_welcome, terminal_relay_fixture::Relay,
@@ -33,6 +34,12 @@ fn managed_consent_single_port_private_wss() {
     ]);
 }
 
+#[test]
+#[ignore = "opt-in registered signed expired Delivery retirement"]
+fn managed_expired_delivery_private_wss() {
+    run_cases(&["port-expired"]);
+}
+
 pub(super) struct Fixture<'a, 'profile> {
     pub(super) relay: &'a Relay,
     pub(super) port: &'a mut PeerRecipientPort,
@@ -58,7 +65,8 @@ impl Fixture<'_, '_> {
         &mut self,
         owner: &mut RecoveredOwner<'_>,
         queued: &ManagedQueued,
-    ) -> [u8; 32] {
+        short_lived: bool,
+    ) -> ([u8; 32], u64) {
         let (_, frame) = queued.fixture_frame();
         let codec = wire::Codec::for_version(wire::MAX_OUTER_BYTES, ControlVersion::V2).unwrap();
         let consent = codec
@@ -74,14 +82,14 @@ impl Fixture<'_, '_> {
             consent.key_package().clone(),
         )
         .await;
+        let now = wall();
+        let expires = if short_lived {
+            now + 300 + 7
+        } else {
+            consent.flight().expires_at - 1
+        };
         let delivery = codec
-            .prepare_delivery(
-                self.founder,
-                &consent,
-                &welcome,
-                wall(),
-                consent.flight().expires_at - 1,
-            )
+            .prepare_delivery(self.founder, &consent, &welcome, now, expires)
             .unwrap();
         let flight = delivery.flight.flight();
         assert!(
@@ -163,7 +171,7 @@ impl Fixture<'_, '_> {
             .unwrap();
         assert_eq!(result.status, Status::Deferred);
 
-        for _ in 0..3 {
+        for _ in 0..if short_lived { 0 } else { 3 } {
             let (due, _, _) = owner
                 .checkpoint
                 .fixture_retry_row(&owner.source, flight.carrier_id.to_bytes())
@@ -192,8 +200,161 @@ impl Fixture<'_, '_> {
                 .unwrap();
             assert!(observation.is_none());
         }
-        flight.carrier_id.to_bytes()
+        (flight.carrier_id.to_bytes(), expires - 300)
     }
+}
+
+async fn retire_expired(
+    mut fixture: Fixture<'_, '_>,
+    mut owner: RecoveredOwner<'_>,
+    queued: ManagedQueued,
+) {
+    let total = Instant::now();
+    let (expired_id, cutoff) = fixture.defer_delivery(&mut owner, &queued, true).await;
+    assert!(
+        wall() < cutoff,
+        "the signed Delivery was deferred before its cutoff"
+    );
+    let other = [0xe3; 32];
+    let other_prerequisite = [0x75; 32];
+    owner
+        .checkpoint
+        .fixture_later_retry(&owner.source, expired_id, other, other_prerequisite, cutoff)
+        .unwrap();
+    let original = fixture.profile.join("peer/provisional-unknown.db");
+    let bytes = fs::read(&original).unwrap();
+    let native = welcome_counts();
+    let relay_attempts = fixture.relay.publication_attempts(CARRIER);
+    let relay_frames = fixture.relay.peer_transcript().len();
+    let sleep_deadline = Instant::now() + Duration::from_secs(10);
+    while wall() < cutoff {
+        assert!(Instant::now() < sleep_deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let saved = fixture
+        .port
+        .use_current_recipient(|account, origin, wall| {
+            owner.due_managed_delivery(account, origin, wall)
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let before = owner
+        .checkpoint
+        .fixture_delivery_state(&owner.source)
+        .unwrap();
+    let retire = |fixture: &mut Fixture<'_, '_>, owner: &mut RecoveredOwner<'_>, stop| {
+        let observation = fixture
+            .port
+            .use_saved_delivery(&saved, |checked| {
+                owner.observe_managed_saved_delivery(checked)
+            })
+            .unwrap()
+            .unwrap();
+        let ManagedSaved::Expired(expired) = observation else {
+            panic!("the signed saved Delivery should be expired");
+        };
+        fixture
+            .port
+            .use_expired_delivery_native(expired, |route| {
+                owner.retire_expired_delivery(fixture.quota, route, fixture.readiness.clone(), stop)
+            })
+            .unwrap()
+    };
+
+    // Temporary loss fences the turn, including both floors and exact row.
+    let retired_row = owner
+        .checkpoint
+        .fixture_retry_row(&owner.source, expired_id)
+        .unwrap();
+    let other_row = owner
+        .checkpoint
+        .fixture_retry_row(&owner.source, other)
+        .unwrap();
+    assert_eq!(
+        retire(&mut fixture, &mut owner, Arc::new(AtomicBool::new(true))),
+        Retirement::Transient
+    );
+    assert_eq!(
+        owner
+            .checkpoint
+            .fixture_delivery_state(&owner.source)
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        owner
+            .checkpoint
+            .fixture_retry_row(&owner.source, expired_id)
+            .unwrap(),
+        retired_row
+    );
+
+    change_image(&original, 0, bytes[0] ^ 1);
+    let stop = fixture.stop.clone();
+    assert_eq!(
+        retire(&mut fixture, &mut owner, stop.clone()),
+        Retirement::Stop
+    );
+    change_image(&original, 0, bytes[0]);
+    assert_eq!(
+        owner
+            .checkpoint
+            .fixture_delivery_state(&owner.source)
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        owner
+            .checkpoint
+            .fixture_retry_row(&owner.source, expired_id)
+            .unwrap(),
+        retired_row
+    );
+
+    let measured = Instant::now();
+    assert_eq!(retire(&mut fixture, &mut owner, stop), Retirement::Retired);
+    let elapsed = measured.elapsed();
+    let after = owner
+        .checkpoint
+        .fixture_delivery_state(&owner.source)
+        .unwrap();
+    assert_eq!(after[..2], before[..2]);
+    assert!(after[2] >= before[2]);
+    assert_eq!(after[2], after[3]);
+    assert_eq!(after[4], 1);
+    assert_eq!(after[5], before[5]);
+    assert!(
+        owner
+            .checkpoint
+            .fixture_retry_row(&owner.source, expired_id)
+            .is_err()
+    );
+    assert_eq!(
+        owner
+            .checkpoint
+            .fixture_retry_row(&owner.source, other)
+            .unwrap(),
+        other_row
+    );
+    let next = fixture
+        .port
+        .use_current_recipient(|account, origin, wall| {
+            owner.due_managed_delivery(account, origin, wall)
+        })
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(next.fixture_id(), other);
+    assert_eq!(welcome_counts(), native);
+    assert_eq!(fixture.relay.publication_attempts(CARRIER), relay_attempts);
+    assert_eq!(fixture.relay.peer_transcript().len(), relay_frames);
+    assert_eq!(fs::read(&original).unwrap(), bytes);
+    eprintln!(
+        "managed_expired_delivery native_turn_ms={:.3} total_ms={:.3}",
+        elapsed.as_secs_f64() * 1000.0,
+        total.elapsed().as_secs_f64() * 1000.0
+    );
 }
 
 fn change_image(path: &Path, offset: u64, byte: u8) {
@@ -212,13 +373,17 @@ pub(super) async fn run<'profile>(
     queued: ManagedQueued,
     reopen: impl FnOnce() -> RecoveredOwner<'profile>,
 ) {
+    if case == "expired" {
+        retire_expired(fixture, owner, queued).await;
+        return;
+    }
     let native = welcome_counts();
     let (carrier, bytes) = queued.fixture_frame();
     let bytes = bytes.to_vec();
     let selector = Selector::from(fixture.offer);
     let wake = matches!(case, "positive" | "wake-cut" | "wake-stop");
     let related = if wake {
-        let delivery = fixture.defer_delivery(&mut owner, &queued).await;
+        let (delivery, _) = fixture.defer_delivery(&mut owner, &queued, false).await;
         let other = [0xa8; 32];
         let other_prerequisite = [0x55; 32];
         let prior = owner
@@ -447,8 +612,10 @@ pub(super) async fn run<'profile>(
                     owner.observe_managed_saved_delivery(checked)
                 })
                 .unwrap()
-                .unwrap()
                 .unwrap();
+            let ManagedSaved::Live(prepared) = prepared else {
+                panic!("saved Delivery should be live");
+            };
             let proof = fixture
                 .port
                 .use_delivery_native(prepared.challenge(), |checked| {

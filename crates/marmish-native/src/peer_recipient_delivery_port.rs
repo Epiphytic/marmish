@@ -2,7 +2,7 @@
 //! converting the saved bytes into an observed relay record.
 
 use super::*;
-use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::{DeliveryChallenge, DeliveryPort, retry::SavedDelivery};
+use crate::peer_invitation::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::{DeliveryChallenge, DeliveryPort, retry::{SavedDelivery, retirement::ExpiredSaved}};
 
 pub(in crate::peer_invitation) struct CheckedSavedDelivery<'port, 'saved> {
     scope: &'port Arc<Scope>,
@@ -42,6 +42,17 @@ impl PeerRecipientPort {
         self.use_current_native(|route| use_checked(CheckedDeliveryRoute { route, challenge }))
     }
 
+    pub(in crate::peer_invitation) fn use_expired_delivery_native<'saved, T>(
+        &mut self,
+        expired: ExpiredSaved<'saved>,
+        use_checked: impl FnOnce(CheckedExpiredRoute<'_, 'saved>) -> T,
+    ) -> Result<T> {
+        if !self.0.current(&expired.port().0) {
+            return Err(Failure::Binding);
+        }
+        self.use_current_native(|route| use_checked(CheckedExpiredRoute { route, expired }))
+    }
+
     pub(in crate::peer_invitation) fn use_saved_delivery<'saved, T>(
         &mut self,
         saved: &'saved SavedDelivery,
@@ -73,5 +84,22 @@ impl<'route, 'turn> CheckedDeliveryRoute<'route, 'turn> {
         DeliveryChallenge<'turn>,
     ) {
         (self.route, self.challenge)
+    }
+}
+
+/// The exact observed expired flight paired with its current authenticated route.
+pub(in crate::peer_invitation) struct CheckedExpiredRoute<'route, 'saved> {
+    route: crate::peer_relay_trust::NativeRouteWindow<'route>,
+    expired: ExpiredSaved<'saved>,
+}
+
+impl<'route, 'saved> CheckedExpiredRoute<'route, 'saved> {
+    pub(in crate::peer_invitation) fn into_parts(
+        self,
+    ) -> (
+        crate::peer_relay_trust::NativeRouteWindow<'route>,
+        ExpiredSaved<'saved>,
+    ) {
+        (self.route, self.expired)
     }
 }

@@ -1,6 +1,10 @@
 //! Requalify one revisioned stored Delivery after its Consent settles.
 
 use super::*;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "peer_expired_delivery_retirement.rs"]
+pub(in crate::peer_invitation) mod retirement;
+
 use crate::peer_invitation::{
     socket::owner::recipient::{CheckedSavedDelivery, SavedPortWitness},
     store::retry::{RetryFinding, Snapshot},
@@ -14,6 +18,11 @@ pub(in crate::peer_invitation) struct SavedDelivery {
 }
 
 impl SavedDelivery {
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_id(&self) -> [u8; 32] {
+        self.snapshot.record().id
+    }
+
     pub(in crate::peer_invitation) fn matches_route(
         &self,
         account: PublicKey,
@@ -77,6 +86,15 @@ impl Checkpoint {
         source: &Source,
         checked: CheckedSavedDelivery<'_, 'saved>,
     ) -> Result<Option<PreparedSaved<'saved>>> {
+        self.observe_saved(source, checked, false)
+    }
+
+    fn observe_saved<'saved>(
+        &mut self,
+        source: &Source,
+        checked: CheckedSavedDelivery<'_, 'saved>,
+        retirement: bool,
+    ) -> Result<Option<PreparedSaved<'saved>>> {
         let (saved, wall) = checked.observation();
         self.check_local_owner(&saved.owner)?;
         let raw = saved.snapshot.record();
@@ -92,8 +110,19 @@ impl Checkpoint {
         let key = Selector::from_delivery(&incoming);
         let (queued, expires) =
             self.read_installed_consent(source, saved.account, &saved.origin, wall, |tx, cx| {
+                let retiring = retirement && wall >= saved.snapshot.metadata.expires;
+                if retiring {
+                    let prerequisite = saved.snapshot.metadata.prerequisite.ok_or(Error::Index)?;
+                    saved
+                        .snapshot
+                        .require_current_flight(tx, cx.origin, prerequisite)?;
+                }
                 let Ancestry::Queued(queued) = cx.installed_ancestry(tx, key)? else {
-                    return Err(CursorError::Stale.into());
+                    return Err(if retiring {
+                        Error::Missing
+                    } else {
+                        CursorError::Stale.into()
+                    });
                 };
                 saved.snapshot.require_current_flight(
                     tx,

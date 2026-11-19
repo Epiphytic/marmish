@@ -4,6 +4,7 @@ use crate::mdk_adapter::peer_native_signer::ProvisionalPackage;
 
 use super::clean::CleanFiles;
 use super::paths::retirement::package_files::PackageDirectory;
+use super::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::retry::retirement::{ExpiredSaved, HistoricalSample};
 use super::store::consent_checkpoint::provisioning::{
     Reservation,
     prepared_consent::{ManagedQueued, PackageTarget},
@@ -63,6 +64,38 @@ impl PackageOperation<'_> {
             self.label.clone(),
             self.window,
         )
+    }
+}
+
+/// Charged copy only. This operation carries no original native effect.
+pub(crate) struct RetirementPackageOperation<'a> {
+    copy: PackageOperation<'a>,
+    sample: &'a HistoricalSample,
+}
+
+impl RetirementPackageOperation<'_> {
+    pub(crate) fn read(self, path: &std::path::Path) -> NativeResult<ProvisionalPackage> {
+        let stage = self.copy.open(path)?;
+        stage.require_unjoined_provisional()?;
+        let package = stage.read_provisional(self.sample.stage_sample())?;
+        self.copy.window.check()?;
+        Ok(package)
+    }
+}
+
+pub(in crate::peer_invitation) struct RetirementImage {
+    stage: (Binding, FileWitness),
+    extent: FileExtent,
+    digest: [u8; 32],
+    package: ProvisionalPackage,
+}
+
+impl RetirementImage {
+    pub(in crate::peer_invitation) fn require(&self, expired: &ExpiredSaved<'_>) -> Option<&[u8]> {
+        let (stage, artifact) = expired.stage();
+        let event = &self.package.event;
+        (self.stage == stage && Artifact::new(event.id, &event.bytes, event.expires) == artifact)
+            .then_some(&event.bytes)
     }
 }
 
@@ -301,7 +334,8 @@ impl<'lease> RecoveredOwner<'lease> {
                 false,
             )?;
         }
-        let (package, extent, digest) = self.read_charged_package(quota, binding, file, window)?;
+        let (package, extent, digest) =
+            self.read_charged_package(quota, (binding, file), window, None)?;
         let artifact = exact_artifact(&package, window)?;
         if live.is_some_and(|live| live != artifact)
             || recorded.is_some_and(|stored| stored != artifact)
@@ -354,7 +388,8 @@ impl<'lease> RecoveredOwner<'lease> {
         };
         confirm(self)?;
         let (binding, file) = target.stage();
-        let (package, extent, digest) = self.read_charged_package(quota, binding, file, window)?;
+        let (package, extent, digest) =
+            self.read_charged_package(quota, (binding, file), window, None)?;
         if exact_artifact(&package, window)? != target.artifact() {
             return Err(Error::Binding);
         }
@@ -381,15 +416,57 @@ impl<'lease> RecoveredOwner<'lease> {
         self.checkpoint
             .require_managed_package_target(&proof.target)?;
         window.require_offer_limit(proof.target.deadline())?;
+        self.recheck_package_image(
+            quota,
+            proof.target.stage(),
+            (proof.extent, proof.digest),
+            window,
+        )
+    }
+
+    pub(super) fn read_retirement_image(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        expired: &ExpiredSaved<'_>,
+        window: &NativeWindow,
+    ) -> Result<RetirementImage> {
+        let quota = self.exact_package_quota(quota)?;
+        let (stage, _) = expired.stage();
+        let (package, extent, digest) =
+            self.read_charged_package(quota, stage, window, Some(&expired.historical_sample()))?;
+        Ok(RetirementImage {
+            stage,
+            extent,
+            digest,
+            package,
+        })
+    }
+
+    pub(super) fn recheck_retirement_image(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        image: &RetirementImage,
+        window: &NativeWindow,
+    ) -> Result<()> {
+        let quota = self.exact_package_quota(quota)?;
+        self.recheck_package_image(quota, image.stage, (image.extent, image.digest), window)
+    }
+
+    fn recheck_package_image(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        (binding, file): (Binding, FileWitness),
+        (extent, digest): (FileExtent, [u8; 32]),
+        window: &NativeWindow,
+    ) -> Result<()> {
         let fence = || NativeFence::Candidate(window);
-        let (binding, file) = proof.target.stage();
         let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
         let original = files.original();
         check_file_witness(original, file)?;
-        if original != proof.extent
+        if original != extent
             || PackageDirectory::open(&self.paths, files.files())?
                 .original_digest(original, &fence())?
-                != proof.digest
+                != digest
             || files.finish(self, fence(), true)? != original
         {
             return Err(Error::StageIdentityMismatch);
@@ -427,9 +504,9 @@ impl<'lease> RecoveredOwner<'lease> {
     fn read_charged_package(
         &mut self,
         quota: &ReceiverQuota<'_>,
-        binding: Binding,
-        file: FileWitness,
+        (binding, file): (Binding, FileWitness),
         window: &NativeWindow,
+        historical: Option<&HistoricalSample>,
     ) -> Result<(ProvisionalPackage, FileExtent, [u8; 32])> {
         let fence = || NativeFence::Candidate(window);
         let files = CleanFiles::begin(self, quota, self.paths.lease(), binding, fence())?;
@@ -447,10 +524,18 @@ impl<'lease> RecoveredOwner<'lease> {
                 window,
             )?;
             let operation = self.package_operation(binding, window);
-            let read = files
-                .files()
-                .attest_package(permit, operation)
-                .map_err(|_| Error::Path)?;
+            let read = if let Some(sample) = historical {
+                files.files().attest_expired_package(
+                    permit,
+                    RetirementPackageOperation {
+                        copy: operation,
+                        sample,
+                    },
+                )
+            } else {
+                files.files().attest_package(permit, operation)
+            }
+            .map_err(|_| Error::Path)?;
             files.snapshot_closed(self, copy.identity(), fence())?;
             Ok::<_, Error>(read?)
         })();

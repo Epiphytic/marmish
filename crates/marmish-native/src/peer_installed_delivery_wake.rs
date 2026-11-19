@@ -79,6 +79,27 @@ impl Checkpoint {
         ))
     }
 
+    pub(in crate::peer_invitation) fn fixture_later_retry(
+        &self,
+        source: &Source,
+        matched: EventId,
+        other: EventId,
+        unrelated: EventId,
+        due: u64,
+    ) -> Result<()> {
+        self.fixture_other_retry(source, matched, other, unrelated)?;
+        let cx = self.custody_context(source)?;
+        let updated = self.cursor.conn.execute(
+            "UPDATE peer_cursor_deferred SET retry_at=?3, expires=?4
+             WHERE origin=?1 AND id=?2",
+            params![cx.origin, other, seconds(due)?, seconds(due + 60)?],
+        )?;
+        if updated != 1 {
+            return Err(Error::Index);
+        }
+        Ok(())
+    }
+
     pub(in crate::peer_invitation) fn fixture_other_retry(
         &self,
         source: &Source,

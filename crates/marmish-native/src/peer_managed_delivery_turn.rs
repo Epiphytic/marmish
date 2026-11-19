@@ -3,12 +3,15 @@
 use super::package::PackageProof;
 use super::store::consent_checkpoint::provisioning::prepared_consent::custody::delivery_ingress::{
     Observation, Prepared,
-    retry::{PreparedSaved, SavedDelivery},
+    retry::{
+        PreparedSaved, SavedDelivery,
+        retirement::{ManagedSaved, Retirement},
+    },
 };
 use super::store::consent_checkpoint::{self, Disposition, Status};
 use super::*;
 use crate::peer_invitation::socket::owner::recipient::{
-    CheckedCarrier, CheckedDeliveryRoute, CheckedSavedDelivery,
+    CheckedCarrier, CheckedDeliveryRoute, CheckedExpiredRoute, CheckedSavedDelivery,
 };
 use nostr::key::PublicKey;
 
@@ -70,13 +73,48 @@ impl<'lease> RecoveredOwner<'lease> {
     pub(in crate::peer_invitation) fn observe_managed_saved_delivery<'saved>(
         &mut self,
         checked: CheckedSavedDelivery<'_, 'saved>,
-    ) -> Result<Option<PreparedSaved<'saved>>> {
+    ) -> Result<ManagedSaved<'saved>> {
         self.cursor.unchanged()?;
         let outcome = self
             .checkpoint
-            .observe_saved_delivery(&self.source, checked)?;
+            .observe_managed_saved(&self.source, checked)?;
         self.cursor.unchanged()?;
         Ok(outcome)
+    }
+
+    pub(in crate::peer_invitation) fn retire_expired_delivery(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        checked: CheckedExpiredRoute<'_, '_>,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Retirement {
+        let (route, expired) = checked.into_parts();
+        if let Err(outcome) =
+            expired.check_route(route.account(), route.origin(), route.wall().as_secs())
+        {
+            return outcome;
+        }
+        // The cutoff authenticates past bytes. Only current route and health
+        // ceilings can authorize the bounded local cleanup.
+        let Ok(window) = route.window(readiness, stop, u64::MAX) else {
+            return Retirement::Transient;
+        };
+        let retire = || -> Result<()> {
+            self.cursor.unchanged()?;
+            let image = self.read_retirement_image(quota, &expired, &window)?;
+            let proof = self.checkpoint.verify_retirement(expired, &image)?;
+            self.recheck_retirement_image(quota, &image, &window)?;
+            self.cursor.unchanged()?;
+            self.checkpoint
+                .finish_retirement(&self.source, proof, &window)?;
+            Ok(())
+        };
+        match retire() {
+            Ok(()) => Retirement::Retired,
+            Err(_) if window.sample().is_err() => Retirement::Transient,
+            Err(error) => Retirement::failure(error),
+        }
     }
 
     pub(in crate::peer_invitation) fn measure_delivery(

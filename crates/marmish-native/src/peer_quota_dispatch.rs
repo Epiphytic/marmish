@@ -1038,6 +1038,19 @@ impl ReceiverFiles<'_> {
         self.inspect_snapshot(permit, |path| Ok(operation.attest(path)))
     }
 
+    pub(crate) fn attest_expired_package(
+        &self,
+        permit: crate::peer_invitation::CleanPermit<'_>,
+        operation: crate::peer_invitation::RetirementPackageOperation<'_>,
+    ) -> Result<
+        std::result::Result<
+            crate::mdk_adapter::peer_native_signer::ProvisionalPackage,
+            crate::mdk_adapter::peer_native_signer::StageError,
+        >,
+    > {
+        self.inspect_snapshot(permit, |path| Ok(operation.read(path)))
+    }
+
     pub(crate) fn prepare_join(
         &self,
         permit: crate::peer_invitation::CleanPermit<'_>,
