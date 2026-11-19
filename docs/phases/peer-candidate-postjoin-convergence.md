@@ -26,10 +26,14 @@ The previous Cold Acceptance Receipt proof remains evidence for a separate phase
 
 Use a distinct private qualification intent and fresh disposable
 `ManualPostJoinV4` cursor/custody layout. This preserves the unrelated stock and
-previous v3 launch paths. V4 refuses existing v3, v2 or legacy stores through
-the existing read-only marker, ownership and topology preflight before a
-mutating open. V3 likewise refuses v4. Preserve immutable markers and the two
-authoritative wall floors. No migration, auxiliary cursor or app database.
+previous v3 launch paths. Extend `InstalledKind::other_marker` to check the full foreign-marker set
+inside `open_installed`'s existing IMMEDIATE transaction before any schema
+or row write. V2, v3 and v4 each refuse the other two, as well as prior
+unsupported layouts. Default v2 selection and registration stay unchanged.
+Preserve immutable markers and the two authoritative wall floors. Compile
+the scoped journal and verification apertures only under the existing
+Linux AMD64 private candidate cfg. No migration, auxiliary cursor or app
+database.
 Verify the executable/layout identity and real ordinary and Peer route
 qualifications at launch as in the existing installed fixture. The new route
 aperture is confined to this private qualification and has its own closed
@@ -60,10 +64,13 @@ mutex, quota guard or native handle crosses a network wait.
 
 Add two private inner classes to `peer_control_wire.rs`, using the existing
 kind 7435 envelope, exact `#p`, NIP-44 signed seal, checked route/origin and
-canonical bounded v2 parsing. Use dedicated inner kinds 24868 and 24869 with
+canonical bounded v2 parsing. Use dedicated inner kinds 24869 and 24870 with
 closed `postjoin_baseline` and `postjoin_converged` bodies, compatibility limited
 to the v4 proof intent. Current v1/v2 Offer, Consent and Delivery bytes stay
-unchanged. Only the already verified founder may authenticate the inner
+unchanged. Stock and v3 ignore the new classes under their existing unrelated
+input treatment, without authority over an enrollment, charge or publication.
+Advance only their existing relay scan bookkeeping when applicable. Only the
+already verified founder may authenticate the inner
 observation. Outer relay encryption identity, group routing hint, NIP-42
 transport authentication and knowledge of a public pin carry no founder
 authority alone. Verify exact inner/outer IDs, signatures at existing envelope
@@ -84,7 +91,13 @@ compared to values chosen by the other participant.
   the recipient's original leaf hash. The joined recipient's authentic
   Welcome pin is the preceding epoch. An opaque founder observation is minted
   after the founder proves prior Welcome, the exact durable native
-  SelfUpdate and stable scope under its own current grant. Reactivating a
+  SelfUpdate and stable scope under its own current grant. The fixture
+  retains sole control of that group, freezes founder-originated Group writes
+  and suppresses fresh maintenance authoring through
+  `run_due_maintenance_holding` or by leaving maintenance unpolled after
+  Baseline. It checks the source on every relevant visit and permits only the
+  expected recipient commit to change the pin until Converged or cutoff.
+  Reactivating a
   stale founder journal or having only a matching membership list confers
   no permission to issue an assertion.
 - Converged references the exact Baseline rumor ID and resulting source, the
@@ -127,7 +140,11 @@ history event ID and signed-byte digest, no changed route, contradictory
 duplicate, truncation, or missing matching update. Unrelated frames yield no
 native authority. EOSE and MDK history bookkeeping alone never prove content
 or convergence. Reuse `start_post_join_history_fetch`, `finish_post_join_history_fetch`
-and `mark_post_join_eose` only through a verified native history turn.
+and `mark_post_join_eose` only through a verified native history turn. Record
+`mark_post_join_subscription_installed` and reserve the fetch ID in a short
+closed native turn after the authenticated REQ is sent. No native handle is
+held while receiving EOSE. Apply the exact completed cut under its current
+incarnation in the next measured native turn and close before returning.
 
 Use the existing measured original/copy model in `peer_receiver_inventory.rs`
 and `peer_quota_dispatch.rs`. Before any effects reserve the exact existing
@@ -142,24 +159,63 @@ and no broad adapter or transport permission.
 The public MDK runtime exposes `run_due_maintenance` and
 `resume_outbound_fanouts` but no public setter for an arbitrary
 `TransportPublishReport`. Qualify the split before mounting the actor. An
-immediately-ready, no-network, deny-by-default adapter captures one exact
-`TransportPublishRequest` with a non-accepting report. Closed authenticated
-readback checks the exact single own-leaf obligation, native pending state
-reference, semantic evolution, frozen fanout and normalized signed request,
-including sole endpoint and required acknowledgement count. Independently
-prove the cold reopened resume asks for that same request and the one-use
-adapter can return a typed positive report only from a checked physical ACK
-for that current attempt. Do physical WSS publication between the closed
-native turns. An unrelated adapter call, second request, pending poll,
-unexpected durable state, elapsed deadline or unsupported locked API fails
-the qualification. Respect native retry delay; do not hand-edit native rows
-or swap clocks to force live readiness. A single checked readback may need
-an additional individually fenced native sweep already seen in the isolated
-proof. A successful test must demonstrate exact stable confirmation under this
-split, with no cache-held native state or database handle across transport.
-If pinned MDK cannot expose and settle the exact continuation under these
-constraints, stop before installed mounting and report the native interface
-gap. Do not add a fork or weaken the quota.
+immediately-ready no-network adapter captures one exact
+`TransportPublishRequest` and returns a typed `PossiblyExposed` failure with
+`pre_send: false` for the single endpoint. This deliberately preserves the
+uncertain native continuation after the database closes and before any
+possible physical exposure. A `NotExposed` classification could let MDK
+abandon an externally delivered commit later. Closed authenticated readback
+checks the exact single own-leaf obligation, native pending reference,
+semantic evolution, frozen fanout, endpoint, required acknowledgement and
+canonical signed bytes. The adapter denies and counts the separately typed
+known KeyPackage publisher call, with no egress, app effect or unsettled
+native work authorized by that call. Any other transport request, second
+Group request, pending poll, late result or shape drift fails qualification.
+
+First capture consumes one negative native attempt. Native attempts are
+independent of physical `Armed` attempt numbers. Positive settlement
+consumes a separate native attempt when MDK says the persisted retry is due,
+with a one-use no-network adapter returning the matched same-attempt physical
+ACK only if the exact frozen request is presented again. A lost physical ACK
+causes no intermediate negative native attempt. The one optional physical
+retry uses validated cold readback and the same stored bytes without running
+the native retry callback again. Current MDK starts ambiguous backoff at 30
+seconds and doubles it after another ambiguous native attempt. A second
+ambiguous native report is outside this proof. Await the actual persisted
+native due time and stop all retries and native settlement before 600 seconds
+from first native attempt, or at any shorter existing cutoff. MDK's later
+`read_back` and abandonment paths are outside this phase. Positive settlement
+may require a separately fenced maintenance sweep to finish the exact
+obligation, with no further publish.
+
+Use native defaults and real elapsed time. The existing signed Held/Pending
+cutoff remains exclusive throughout PostJoin. Baseline can shorten that
+cutoff and never extend it. For the existing fixture's 300 seconds from
+Delivery, reserve the first 65 seconds for approval and the verified history
+turn, then up to 110 seconds to cover the 60-second quiet, 15-second grace
+when applicable, up to 30 seconds contention jitter and polling margin with
+EOSE received. Reserve up to 90 seconds for capture, physical ACK or one
+bounded lost-ACK interval, founder proof, native backoff (overlapping those
+physical exchanges), cold reopen and confirmation. The remaining 35 seconds
+are slack. Require real EOSE within the history budget rather than waiting
+MDK's 300-second fallback. Shortened qualification, TLS or fixture window can
+only fence earlier. Record the observed components and refuse late results
+even if a host operation returns. No synthetic clock, timer or schema changes
+to make the installed proof pass.
+
+Preserve the older M4 verifier and its exact semantics. Factor pure local checks
+from `pre_capture`, `post_capture`, `reopen`, `recover_unexposed`,
+`recover_exposed` and `confirm_rotation_cold` into a candidate-only API with
+sealed proof roles. Before first send the new path revalidates the retained
+Baseline, actual authenticated local history, exact native source and current
+qualification. Baseline alone has no claim about the founder's ongoing disk
+state. The dedicated founder policy supplies exclusivity in the private proof.
+Only authenticated Converged can authorize a retry or durable completion, and
+each requires independent exact cold local readback. A successful test must
+show native stable confirmation without a cache-held native runtime or handle
+across transport. If the pinned API cannot advance the exact frozen request
+with these bounds, stop before installation and report the missing contract.
+Do not add a fork or weaken the quota.
 
 ## Journal and restart
 
@@ -183,10 +239,14 @@ native due time and current qualification. Never recreate a candidate. Exact
 checked relay ACK permits one native settlement, under a freshly verified
 same attempt. It does not itself confirm local PostJoin. If closed native
 state already proves stable completion at the exact target with the exact
-confirmed evolution/processed ID and matching Converged assertion, record
+confirmed evolution's signed message ID and matching Converged assertion, record
 confirmation without retransmission. Persist applicable current wall floors
 and proof bindings atomically in the publication confirmation CAS. Replaying
-that confirmation is read-only and contributes no effects.
+that confirmation is read-only and contributes no effects. A cut after Arm
+and before physical delivery has no Converged assertion and allows no retry.
+It ends at cutoff with unchanged charged Activating custody. A cut after
+physical delivery can progress only when Converged and current exact
+recovery checks supply authority.
 
 The custody row remains Manual Activating before and after confirmation. No
 Active transition, acceptance receipt, room descriptor, status subscription,
@@ -224,7 +284,8 @@ binaries.
 Refuse wrong signer/recipient/transcript/origin/epoch/leaf/candidate, expired
 or conflicting proof, missing history despite EOSE, stale incarnation, copied
 stage or wrong qualification layout, and an unrelated native fanout. Test
-v3/v4 mutual refusal, journal/floor rollback, exact cutoff/no data loss,
+all three equal-layout accepts and all six distinct v2/v3/v4 refusals,
+journal/floor rollback, exact cutoff and data preservation,
 ordinary commands during Peer failure, and zero activation/receipt/status
 events even after restart. Report application- and relay-visible event counts
 and measured timings separately for approval-to-baseline, verified history,
