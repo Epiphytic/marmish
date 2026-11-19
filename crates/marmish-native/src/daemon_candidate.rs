@@ -260,6 +260,16 @@ impl Listener {
         }
     }
 
+    fn exit_error(&mut self) -> Error {
+        match self.outcome.as_mut() {
+            Some(Ok(Err(error))) => {
+                std::mem::replace(error, Error::Invalid("ipc_listener_stopped"))
+            }
+            Some(Err(_)) => Error::Identity("owned_stop_incomplete"),
+            _ => Error::Invalid("ipc_listener_stopped"),
+        }
+    }
+
     fn start_drain(&mut self) {
         if let Some(drain) = self.drain.take() {
             let _ = drain.send(());
@@ -302,7 +312,7 @@ impl RegisteredOwner {
     async fn serve(
         &mut self,
         listener: &mut Listener,
-        channel: Option<ChildChannel>,
+        channel: &mut Option<ChildChannel>,
     ) -> Result<()> {
         let admission = self
             .admission
@@ -351,7 +361,7 @@ impl RegisteredOwner {
             reason = poll_fn(|cx| match interrupt(cx) {
                 Some(reason) => std::task::Poll::Ready(reason),
                 None => std::task::Poll::Pending,
-            }) => return Err(interruption(reason)),
+            }) => return Err(interruption(reason, listener)),
             outcome = owner.activate(Instant::now() + Duration::from_secs(150)) => outcome?,
         }
         // The status published after C is computed under the same admission.
@@ -360,15 +370,15 @@ impl RegisteredOwner {
         let mut snapshot =
             serde_json::to_value(owner.status()?).map_err(|_| Error::Invalid("status_encoding"))?;
         snapshot["state"] = serde_json::json!("active");
-        if let Some(channel) = channel {
+        if let Some(channel) = channel.take() {
             let _commit = channel
                 .exchange(admission, fatal, interrupt)
                 .await
-                .map_err(report_failure)?;
+                .map_err(|failure| report_failure(failure, listener))?;
         } else {
             let reason = poll_fn(|cx| std::task::Poll::Ready(interrupt(cx))).await;
             if let Some(reason) = reason {
-                return Err(interruption(reason));
+                return Err(interruption(reason, listener));
             }
             admit(admission)?;
         }
@@ -394,7 +404,7 @@ impl RegisteredOwner {
                 _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                 _ = shutdown.as_mut() => return Ok(()),
                 _ = expired.as_mut() => return Ok(()),
-                _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
+                _ = listener.exited() => return Err(listener.exit_error()),
                 pending = requests.recv() => {
                     let pending = pending.ok_or(Error::Invalid("ipc_listener_stopped"))?;
                     admit(admission)?;
@@ -406,7 +416,7 @@ impl RegisteredOwner {
                         _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                         _ = shutdown.as_mut() => return Ok(()),
                         _ = expired.as_mut() => return Ok(()),
-                        _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
+                        _ = listener.exited() => return Err(listener.exit_error()),
                         result = finite_dispatch(owner, profile, &mut rooms, pending.request) => result,
                     };
                     admit(admission)?;
@@ -422,7 +432,7 @@ impl RegisteredOwner {
                         _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                         _ = shutdown.as_mut() => return Ok(()),
                         _ = expired.as_mut() => return Ok(()),
-                        _ = listener.exited() => return Err(Error::Invalid("ipc_listener_stopped")),
+                        _ = listener.exited() => return Err(listener.exit_error()),
                         result = turn => result?,
                     };
                     admit(admission)?;
@@ -456,19 +466,22 @@ async fn tick(owner: &mut MdkOwner, rooms: &mut crate::command_local::RoomIntent
     Ok(degraded)
 }
 
-fn interruption(reason: Interrupt) -> Error {
+fn interruption(reason: Interrupt, listener: &mut Listener) -> Error {
     match reason {
         Interrupt::Shutdown => Error::Invalid("candidate_startup_stopped"),
         Interrupt::Expired => Error::Timeout,
-        Interrupt::ListenerExited => Error::Invalid("ipc_listener_stopped"),
+        Interrupt::ListenerExited => listener.exit_error(),
     }
 }
 
-fn report_failure(failure: crate::daemon_launch::candidate_child::Failure) -> Error {
+fn report_failure(
+    failure: crate::daemon_launch::candidate_child::Failure,
+    listener: &mut Listener,
+) -> Error {
     use crate::daemon_launch::candidate_child::Failure;
     match failure {
         Failure::Fatal | Failure::Admission => Error::Storage("candidate_dispatcher_lost"),
-        Failure::Interrupted(reason) => interruption(reason),
+        Failure::Interrupted(reason) => interruption(reason, listener),
         Failure::TimedOut => Error::Timeout,
         Failure::Acknowledgement | Failure::ParentEof | Failure::Socket(_) => {
             Error::DaemonStartup("registered readiness exchange failed".into())
@@ -482,7 +495,7 @@ pub(crate) async fn run(
     executable: &Path,
     fixture_roots: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
 ) -> Result<()> {
-    let channel = startup.as_ref().map(ChildChannel::take).transpose()?;
+    let mut channel = startup.as_ref().map(ChildChannel::take).transpose()?;
     let origin = ServiceLifetime::start(None)?;
     let (prepared, eligible) = tokio::task::spawn_blocking(move || {
         let loaded = LoadedProfile::load(config, origin)?;
@@ -550,14 +563,12 @@ pub(crate) async fn run(
             let (mut custody, result) = registered.open(executable);
             let mut listener = Listener::default();
             let result = match result {
-                Ok(()) => custody.serve(&mut listener, channel).await,
-                Err(error) => {
-                    if let Some((channel, admission)) = channel.zip(custody.admission.as_ref()) {
-                        channel.fail_before_offer(admission);
-                    }
-                    Err(error)
-                }
+                Ok(()) => custody.serve(&mut listener, &mut channel).await,
+                Err(error) => Err(error),
             };
+            if let Some((channel, admission)) = channel.zip(custody.admission.as_ref()) {
+                channel.fail_before_offer(admission);
+            }
             finish(custody, listener, result).await
         }
     }
