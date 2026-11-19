@@ -132,7 +132,20 @@ async fn stale_status_socket_uses_a_non_consuming_kernel_snapshot() {
     let mut controller = AsyncUnixStream::from_std(controller).unwrap();
     controller.write_all(b"x").await.unwrap();
     drop(peer);
-    assert_eq!(status_socket_state(&controller), "reset");
+    // A concurrently forking child may retain the CLOEXEC peer until exec.
+    // Wait for that transient kernel state to settle without consuming bytes.
+    let closed = timeout_at(Instant::now() + STEP, async {
+        loop {
+            let state = status_socket_state(&controller);
+            if state != "pending" {
+                break state;
+            }
+            sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("bounded kernel reset");
+    assert_eq!(closed, "reset");
 }
 
 #[test]
@@ -214,6 +227,7 @@ async fn observation_failures_retain_the_exact_child_guard() {
         child
             .observe_failure(
                 false,
+                Instant::now() + STEP,
                 |_| Err(io::Error::from_raw_os_error(libc::ECHILD)),
                 |_| panic!("waitid did not identify a child")
             )
@@ -223,7 +237,7 @@ async fn observation_failures_retain_the_exact_child_guard() {
     assert_eq!(child.pid(), pid);
     assert_eq!(
         child
-            .observe_failure(true, waitable, |observed| {
+            .observe_failure(true, Instant::now() + STEP, waitable, |observed| {
                 assert_eq!(observed, pid);
                 false
             })
@@ -425,9 +439,14 @@ async fn runtime_line_needs_an_observed_sigabrt() {
         }
         let mut child = OwnedChild(Some(command.spawn().unwrap()));
         assert_eq!(
-            timeout_at(Instant::now() + STEP * 3, child.failure_status(true))
-                .await
-                .unwrap(),
+            child
+                .observe_failure(
+                    true,
+                    Instant::now() + STEP * 3,
+                    waitable,
+                    signal_private_group,
+                )
+                .await,
             end
         );
         assert!(child.0.is_none(), "exact private child reaped");

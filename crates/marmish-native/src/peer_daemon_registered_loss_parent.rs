@@ -96,17 +96,22 @@ impl OwnedChild {
     }
 
     async fn failure_status(&mut self, disconnected: bool) -> ChildEnd {
-        self.observe_failure(disconnected, waitable, signal_private_group)
-            .await
+        self.observe_failure(
+            disconnected,
+            Instant::now() + STEP,
+            waitable,
+            signal_private_group,
+        )
+        .await
     }
 
     async fn observe_failure(
         &mut self,
         disconnected: bool,
+        end: Instant,
         waitable: impl Fn(libc::pid_t) -> io::Result<bool>,
         signal_group: impl FnOnce(libc::pid_t) -> bool,
     ) -> ChildEnd {
-        let end = Instant::now() + STEP;
         let Some(child) = self.0.as_mut() else {
             return ChildEnd::ObservationFailed;
         };
