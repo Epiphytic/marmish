@@ -671,7 +671,7 @@ async fn reopen_manual_schema(example: &Path, daemon: &Path, matching: &str, opp
             &opposite_args,
             Selection {
                 server: founder,
-                offer_id: [1; 32],
+                offer_id: [1; 16],
                 revision: [2; 32],
                 generation: 1,
             },
