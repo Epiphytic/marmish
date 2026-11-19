@@ -115,13 +115,13 @@ enum ManualCase {
     Approve,
 }
 
-async fn expect_no_pending(socket: &Path, selection: peer_read::Selection) {
-    use peer_read::{Failure, Reply, Request, client_request};
+async fn expect_no_pending_proof(socket: &Path, selection: peer_read::Selection) {
+    use peer_read::{Failure, Request, client_request};
+    // The private reader publishes only verified Pending entries. The rotor
+    // refuses its ticket when no Pending entry remains after a decision.
     assert_eq!(
         client_request(socket, Request::List {}).await,
-        Ok(Reply::List {
-            entries: Vec::new()
-        }),
+        Err(Failure::Unavailable),
     );
     assert_eq!(
         client_request(socket, Request::Show { selection }).await,
@@ -298,30 +298,15 @@ async fn mounted(case: ManualCase) {
         assert!(cli.status.success(), "{:?}", cli.status);
         assert_eq!(cli.stdout, b"recorded local approval\n");
         assert!(cli.stderr.is_empty());
-        println!(
-            "manual_approval_decision_ms {}",
-            clock.elapsed().as_millis()
-        );
+        println!("manual_approval_cli_ms {}", clock.elapsed().as_millis());
         let clock = Instant::now();
         assert_eq!(
             peer_approve::client_request(&socket, exact.selection).await,
             Ok(()),
         );
         println!("manual_approval_retry_ms {}", clock.elapsed().as_millis());
-        timeout(STEP, async {
-            loop {
-                match peer_read::client_request(&socket, peer_read::Request::List {}).await {
-                    Ok(peer_read::Reply::List { entries }) if entries.is_empty() => break,
-                    Ok(peer_read::Reply::List { entries }) => assert_eq!(entries, [exact]),
-                    Err(peer_read::Failure::Unavailable) => {}
-                    response => panic!("unexpected List response after decision: {response:?}"),
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        })
-        .await
-        .expect("published read view stops showing the approved invitation");
-        expect_no_pending(&socket, exact.selection).await;
+        expect_no_pending_proof(&socket, exact.selection).await;
+        assert!(peer.runtime_socket_active(recipient));
         assert_manual_requests(&peer, signer, recipient);
         assert_eq!(peer.all_publication_attempts(), 3);
     }
@@ -428,7 +413,8 @@ async fn mounted(case: ManualCase) {
         assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
         assert_manual_requests(&peer, signer, reopened_recipient);
         assert_eq!(peer.qualification_connections(), reopened_recipient);
-        expect_no_pending(&socket, exact.selection).await;
+        expect_no_pending_proof(&socket, exact.selection).await;
+        assert!(peer.runtime_socket_active(reopened_recipient));
     } else {
         let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
         if measure_near_cap && cold_entry.is_none() {
