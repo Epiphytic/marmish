@@ -1,0 +1,9 @@
+# Private registered startup driver review
+
+Claude Code reviewed the [driver design](../phases/peer-candidate-startup-driver.md) in Auto mode. Design R1 requested exact held-relay trust and source-matched installed layout checks. R2 approved `e359513` in session `72e571ef-0327-44c5-8f82-70b578cb4e1a`.
+
+Code R1 requested changes in session `c04bb58b-a93d-4b99-945a-afe57098b21b`. The native Command fixture needs its controller under a real installed version to resolve the installed worker. The controller now requires explicit canonical example and daemon paths, checks the claimed prefix and expected placement, and documents how to install the candidate for the ignored test. The updated fixture also checks a mismatched loopback port and the exact refusal when a marked startup would otherwise fall back to stock.
+
+Code R2 approved `d493413` in session `27d738b2-a110-4643-88aa-14b03aef2ac4`. The final review approved source delta parity at `89ef030` in session `9b42d2cc-7678-497d-b54e-839dd7946516`. The final adjustment relies on the existing pre-prepare `LoadedProfile::load` binding check for exact URL and Tor-policy equality. A fresh child with an alternate loopback endpoint is expected to give `command_runtime_binding`, leave the alternate TCP listener idle, create no IPC listener and release the Ready lease. The actual Command output oracle verifies the finite transaction. The aggregate relay kind counter only corroborates the transport.
+
+The author ran scoped Rust formatting and `git diff --check`. A standalone stock-cfg build of the example exited 1 with no stdout and exactly `marmish qualification: unavailable` on stderr. The code reviews were static. The composed candidate build, package installation and opt-in private WSS execution require separate validation. The fresh child is the qualification example with the installed worker and helper. This evidence alone covers neither an executed packaged `marmishd` nor a public startup selector.
