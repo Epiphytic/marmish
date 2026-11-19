@@ -167,21 +167,26 @@ async fn command_startup_late_refusal_retains_and_joins_the_started_worker() {
     let frontend_checks = Arc::clone(&checks);
     let cut_trip = Arc::clone(&trip);
     let frontend = thread::current().id();
-    let (worker_arrived, frontend_wait) = mpsc::sync_channel(1);
+    let (frontend_at_final_check, worker_wait) = mpsc::sync_channel(1);
+    let (worker_tripped, frontend_wait) = mpsc::sync_channel(1);
+    let worker_wait = Mutex::new(worker_wait);
     let frontend_wait = Mutex::new(frontend_wait);
     let admission = Admission::new(&trip, move || {
         if thread::current().id() != frontend {
-            worker_arrived.try_send(()).unwrap();
-            return false;
-        }
-        if frontend_checks.fetch_add(1, Ordering::Relaxed) + 1 == 6 {
-            frontend_wait
+            worker_wait
                 .lock()
                 .unwrap()
                 .recv_timeout(Duration::from_secs(5))
                 .unwrap();
             cut_trip.trip();
-            return false;
+            worker_tripped.try_send(()).unwrap();
+        } else if frontend_checks.fetch_add(1, Ordering::Relaxed) + 1 == 6 {
+            frontend_at_final_check.try_send(()).unwrap();
+            frontend_wait
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap();
         }
         true
     });
