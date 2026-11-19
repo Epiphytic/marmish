@@ -59,7 +59,9 @@ on the fatal transfer. A held join is always transferred and never launched
 again. Journal close, native account close, and cleanup_runtime each require
 Complete listener, engine, runner, SDK, forwarder and raw obligations.
 A failed but exit-eligible stop skips all three effects. Check exact
-Admission and Fatal before each effect and read the latch on return. A cut
+Admission and Fatal before each effect and read the latch on return. Run
+the effects in that order. An error or indeterminate result skips all
+later effects. A cut
 during an already-admitted synchronous effect leaves its disposition
 indeterminate. For cleanup_runtime this window covers the entire call
 including inspection and each unlink. A cut at any step requires nonzero
@@ -82,12 +84,14 @@ Partition every settled result into complete, failed but no remaining
 child/task possible, or uncertain with possibly active ownership.
 Record Joined only from the worker thread join evidence. The join for
 the blocking observer merely returns the engine and its typed result.
+A registered stop observation exposes an explicit marker set where the
+engine worker itself successfully joins.
 A missing thread field supplies no worker evidence. A stop report with
 complete false also supplies no worker join evidence. The runner observation
 reads the finished marker with Acquire before checking that the snapshot is
-neither uncertain nor terminal Failed. In the current leaf every terminal
-Failed outcome carries uncertainty, so FailedNoChild has no current runner
-producer.
+neither uncertain nor terminal Failed. A NotStarted spawn failure sets a
+Failed terminal with no uncertainty and therefore supplies FailedNoChild.
+Exit-observation errors and an uncertain spawn do not supply that proof.
 Healthy stop can report success only with all required proofs. Even without
 a fatal trip, a failed but exit-eligible stop retains roots and the flock
 through nonzero process exit. An uncertain healthy stop holds the lease
@@ -144,7 +148,9 @@ admitted call, original engine and child ownership, and actual listener and
 connector shutdown. Synchronize a held child after cancellation: verify the
 process stays up with the lease and an incomplete diagnostic, then releases
 only after observed child release. Inject a runner exit-observation failure
-or panic and ensure an uncertain runner cannot authorize exit. Interrupt an
+or panic and ensure an uncertain runner cannot authorize exit. Force a
+NotStarted spawn result and verify nonzero exit eligibility after all
+other barriers settle, with no trusted cleanup effects. Interrupt an
 engine turn in flight and between turns, cover Ordinary with complete true
 and quiesced false, inject a panic that loses engine
 ownership, force a full event queue during healthy stop, and trip after the
