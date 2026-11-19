@@ -93,3 +93,14 @@ fixture exercises the gate before signing using the same active admission.
 It does not qualify the mounted SDK callback or WSS route. The daemon
 caller still needs an independent admission check before any reply write.
 [Measured validation](../validation/peer-candidate-command-active.md).
+
+## Composed owner increment
+
+Claude Code Sonnet in Auto mode approved the exact composition
+`b4831f8f59bd5ab6ba65cb8af9706921d5dc817e` in session
+`7c5386c9-155d-4b64-9ce8-7abd8e006a41`. The independent review checked
+the merge against retained Consent, reran both opt-in active cut selectors
+and the stock observer check, and ran four retained Consent regression
+tests against the linked candidate artifact. The author built the source
+and verified both stock and candidate strict lint. The review identified
+no blocking findings. Mounted owner and transport checks remain open.
