@@ -74,10 +74,10 @@ pub(crate) use clean::CleanPermit;
 mod managed_consent;
 #[path = "peer_managed_delivery_turn.rs"]
 pub(in crate::peer_invitation) mod managed_delivery;
-#[path = "peer_manual_work.rs"]
-pub(in crate::peer_invitation) mod manual_work;
 #[path = "peer_manual_ingress.rs"]
 pub(in crate::peer_invitation) mod manual_ingress;
+#[path = "peer_manual_work.rs"]
+pub(in crate::peer_invitation) mod manual_work;
 pub(super) use managed_delivery::MeasuredDelivery;
 #[path = "peer_candidate_package_owner.rs"]
 pub(super) mod package;

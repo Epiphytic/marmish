@@ -153,7 +153,7 @@ async fn managed_consent_ack_child() {
             .unwrap();
         assert!(
             ingress
-                .history_turn(&mut owner, &mut port, deadline())
+                .history_turn(&mut owner, &mut port, Some(deadline()))
                 .await
                 .unwrap()
         );

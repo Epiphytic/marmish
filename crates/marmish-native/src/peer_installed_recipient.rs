@@ -6,6 +6,7 @@ use crate::{
     identity::{IdentityMaterial, ProfileLease},
     ipc::peer_read::pending_view::Producer,
     peer_candidate_startup::{Ready, WorkerStart},
+    peer_quota_vfs::dispatch::ReceiverQuota,
     peer_relay_trust::{
         ReceiverRouteAdmission,
         candidate_registration::{ForwardingVerifier, ReceiverRouteControl, RegisteredReceiver},
@@ -15,7 +16,10 @@ use crate::{
 use std::{
     io,
     panic::AssertUnwindSafe,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -24,6 +28,9 @@ use tokio::{
     time::{Instant, sleep, sleep_until},
 };
 use tokio_util::sync::CancellationToken;
+
+#[path = "peer_manual_recipient_service.rs"]
+mod manual;
 
 const PORT_PROBE: Duration = Duration::from_millis(500);
 const DRAIN_WAIT: Duration = Duration::from_secs(1);
@@ -63,12 +70,15 @@ impl Completion {
 #[must_use]
 pub(crate) struct Actor {
     stop: CancellationToken,
+    manual_stop: Option<Arc<AtomicBool>>,
     worker: Worker,
 }
 
 pub(crate) enum Service {
     Passive,
     Manual(Producer),
+    #[cfg(test)]
+    InertManual(Producer),
 }
 
 enum Worker {
@@ -89,9 +99,13 @@ impl Actor {
     ) -> io::Result<Self> {
         let stop = CancellationToken::new();
         let worker_stop = stop.clone();
+        let manual_stop =
+            matches!(service, Service::Manual(_)).then(|| Arc::new(AtomicBool::new(false)));
+        let worker_manual_stop = manual_stop.clone();
         let thread = thread::Builder::new()
             .name("marmish-peer-recipient".into())
             .spawn(move || {
+                let _stop_on_exit = StopOnExit(worker_manual_stop.as_deref());
                 let forwarding = registration.forwarding_verifier();
                 let Ok(runtime) = Builder::new_current_thread().enable_all().build() else {
                     return Completion::new(Exit::WorkerFailed, PhysicalEnd::NoStart)
@@ -104,6 +118,7 @@ impl Actor {
                         &material,
                         registration,
                         &worker_stop,
+                        worker_manual_stop.as_ref(),
                         service,
                     ))
                 }));
@@ -113,11 +128,13 @@ impl Actor {
             })?;
         Ok(Self {
             stop,
+            manual_stop,
             worker: Worker::Owned(thread),
         })
     }
 
     pub(crate) fn stop(&self) {
+        StopOnExit(self.manual_stop.as_deref()).set();
         self.stop.cancel();
     }
 
@@ -156,11 +173,28 @@ impl Drop for Actor {
     }
 }
 
+struct StopOnExit<'a>(Option<&'a AtomicBool>);
+
+impl StopOnExit<'_> {
+    fn set(&self) {
+        if let Some(stop) = self.0 {
+            stop.store(true, Ordering::Release);
+        }
+    }
+}
+
+impl Drop for StopOnExit<'_> {
+    fn drop(&mut self) {
+        self.set();
+    }
+}
+
 struct StartupFence<'a> {
     ready: Ready,
     stop: &'a CancellationToken,
     forwarding: &'a ForwardingVerifier,
     fatal: &'a Fatal,
+    manual_stop: Option<&'a Arc<AtomicBool>>,
 }
 
 impl StartupFence<'_> {
@@ -195,6 +229,7 @@ async fn run(
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
     stop: &CancellationToken,
+    manual_stop: Option<&Arc<AtomicBool>>,
     service: Service,
 ) -> Completion {
     let forwarding = registration.forwarding_verifier();
@@ -213,6 +248,7 @@ async fn run(
         stop,
         forwarding: &forwarding,
         fatal: &fatal,
+        manual_stop,
     };
     attach(lease, material, registration, fence, service)
         .await
@@ -248,7 +284,7 @@ async fn attach(
     let result = match ReceiverRouteAdmission::registered(token) {
         Ok((admission, drain)) => {
             let result = futures_util::FutureExt::catch_unwind(AssertUnwindSafe(hold_port(
-                admission, &mut owner, &mut fence, service,
+                admission, &mut owner, lease, quota, &mut fence, service,
             )))
             .await;
             revoke_and_reap(fence.ready, &route, &drain).await;
@@ -262,18 +298,17 @@ async fn attach(
     Ok(result)
 }
 
-async fn hold_port(
+async fn hold_port<'profile>(
     admission: ReceiverRouteAdmission,
-    _owner: &mut RecoveredOwner<'_>,
+    owner: &mut RecoveredOwner<'profile>,
+    lease: &'profile ProfileLease,
+    quota: &ReceiverQuota<'profile>,
     fence: &mut StartupFence<'_>,
     service: Service,
 ) -> Exit {
-    // Keep the sole producer inside this future, including while opening the
-    // port. Its drop closes the view before the caller reaps the route.
-    let _producer = match service {
-        Service::Passive => None,
-        Service::Manual(producer) => Some(producer),
-    };
+    // The Producer belongs to this future even during open, so it closes
+    // the listener's projection before the caller reaps the route.
+    let _stop_on_exit = StopOnExit(fence.manual_stop.map(Arc::as_ref));
     #[cfg(test)]
     tests::assert_manual_view_admitted();
     let deadline = match fence.deadline() {
@@ -298,8 +333,17 @@ async fn hold_port(
         tests::assert_manual_view_admitted();
         tests::panic_at("panic_in_hold");
     }
-    // Until the durable service mounts, detect the physical end only. An
-    // incoming record stops this idle owner for recovery by a later service.
+    match service {
+        Service::Manual(producer) => {
+            manual::serve(owner, lease, quota, &mut port, fence, producer).await
+        }
+        Service::Passive => hold_idle(port, fence).await,
+        #[cfg(test)]
+        Service::InertManual(_producer) => hold_idle(port, fence).await,
+    }
+}
+
+async fn hold_idle(mut port: PeerRecipientPort, fence: &mut StartupFence<'_>) -> Exit {
     loop {
         let outcome = tokio::select! {
             biased;
@@ -414,6 +458,7 @@ mod tests {
     async fn uncaught_thread_panic_cannot_prove_physical_end() {
         let mut actor = Actor {
             stop: CancellationToken::new(),
+            manual_stop: None,
             worker: Worker::Owned(thread::spawn(|| panic!("intentional out-of-band panic"))),
         };
         let expected = Ok(Completion::new(Exit::WorkerFailed, PhysicalEnd::Unproved));
@@ -554,7 +599,7 @@ mod tests {
                 .expect("one private projection");
             assert!(reader.admit(NonZeroU64::MIN).is_some());
             assert!(MANUAL_READER.set(reader.clone()).is_ok());
-            (Service::Manual(producer), Some(reader))
+            (Service::InertManual(producer), Some(reader))
         } else {
             (Service::Passive, None)
         };

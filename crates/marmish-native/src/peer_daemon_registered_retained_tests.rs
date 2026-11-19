@@ -9,14 +9,14 @@ use crate::{
 const STOCK: &str = "MARMISH_TEST_REGISTERED_STOCK_LIBTEST";
 const STOCK_DAEMON: &str = "MARMISH_TEST_REGISTERED_STOCK_DAEMON";
 const STOCK_SELECTOR: &str = "peer_invitation::daemon_wss_tests::registered_stock_reopen_child";
-const FIRST: &[u8] = b"one\0; '\"*?[]\xff\r\n";
-const SECOND: &[u8] = b"two\0$HOME \\ &\xfe\n";
+pub(super) const FIRST: &[u8] = b"one\0; '\"*?[]\xff\r\n";
+pub(super) const SECOND: &[u8] = b"two\0$HOME \\ &\xfe\n";
 
 fn assert_marker(path: &Path) {
     assert!(std::fs::read(path).unwrap() == [FIRST, SECOND].concat());
 }
 
-async fn quiet_command_relay(relay: &Relay) {
+pub(super) async fn quiet_command_relay(relay: &Relay) {
     timeout(Duration::from_secs(5), async {
         let mut last = relay.publication_attempts(445);
         let mut stable = Instant::now();
@@ -33,7 +33,7 @@ async fn quiet_command_relay(relay: &Relay) {
     .expect("bounded ordinary relay quiet");
 }
 
-fn launch_stock(daemon: &Path, root: &Path, relay: &Relay, ca: &Path) -> OwnedChild {
+pub(super) fn launch_stock(daemon: &Path, root: &Path, relay: &Relay, ca: &Path) -> OwnedChild {
     let stock = PathBuf::from(std::env::var_os(STOCK).expect("exact stock libtest"));
     assert_eq!(stock.canonicalize().unwrap(), stock);
     let layout = PathBuf::from(std::env::var_os(STOCK_DAEMON).expect("installed stock daemon"));
@@ -66,7 +66,7 @@ async fn stock_evidence(socket: &Path, after: Option<u64>) -> serde_json::Value 
     response.result.expect("ordinary Command evidence page")
 }
 
-async fn assert_stock_rows(socket: &Path, sender: PublicKey, invocations: [String; 2]) {
+pub(super) async fn assert_stock_rows(socket: &Path, sender: PublicKey, invocations: [String; 2]) {
     let page = stock_evidence(socket, None).await;
     let mut rows: Vec<_> = page["rows"].as_array().unwrap().iter().collect();
     rows.sort_by_key(|row| row["cursor"].as_u64().unwrap());
@@ -104,7 +104,7 @@ async fn assert_stock_rows(socket: &Path, sender: PublicKey, invocations: [Strin
     assert!(next["next"].is_null());
 }
 
-async fn conclude_stock(stock: &mut OwnedChild) {
+pub(super) async fn conclude_stock(stock: &mut OwnedChild) {
     stock.0.stdin.take().unwrap().write_all(b"S").unwrap();
     assert!(
         stock.finished().await.success(),

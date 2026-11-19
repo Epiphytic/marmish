@@ -12,6 +12,7 @@ use crate::{
     mdk_adapter::peer_native_signer::{JoinWitness, JoinedAuthority, WelcomeFence},
     peer_candidate_startup::Readiness,
     peer_quota_vfs::dispatch::{ClosedJoin, JoinTurn},
+    peer_relay_trust::candidate_registration::ForwardingVerifier,
 };
 
 use super::*;
@@ -208,6 +209,7 @@ pub(in crate::peer_invitation) enum PendingClock<'a> {
     Candidate {
         readiness: &'a Readiness,
         stop: &'a Arc<AtomicBool>,
+        forwarding: Option<&'a ForwardingVerifier>,
     },
     #[cfg(test)]
     Fixture(&'a AtomicBool),
@@ -223,7 +225,11 @@ impl PendingClock<'_> {
         run: impl FnOnce(&mut PeerRecipientPort, &WelcomeFence<'_>) -> Result<T>,
     ) -> Result<T> {
         match self {
-            Self::Candidate { readiness, stop } => {
+            Self::Candidate {
+                readiness,
+                stop,
+                forwarding,
+            } => {
                 let window = port.use_current_native(|scope| {
                     if scope.account() != native.signer.public_key()
                         || scope.origin() != native.origin
@@ -231,9 +237,16 @@ impl PendingClock<'_> {
                     {
                         return Err(Error::Binding);
                     }
-                    scope
-                        .window(readiness.clone(), stop.clone(), deadline)
-                        .map_err(|_| Error::Binding)
+                    match forwarding {
+                        Some(forwarding) => scope.manual_window(
+                            readiness.clone(),
+                            stop.clone(),
+                            deadline,
+                            forwarding,
+                        ),
+                        None => scope.window(readiness.clone(), stop.clone(), deadline),
+                    }
+                    .map_err(|_| Error::Binding)
                 })??;
                 run(port, &WelcomeFence::Candidate(&window))
             }
@@ -329,7 +342,7 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         )
     }
 
-    #[cfg(marmish_peer_receiver_candidate)]
+    #[cfg(all(test, marmish_peer_receiver_candidate))]
     pub(in crate::peer_invitation) fn observe_pending(
         owner: &'turn mut RecoveredOwner<'lease>,
         lease: &'lease ProfileLease,
@@ -340,6 +353,25 @@ impl<'turn, 'lease> PendingTurn<'turn, 'lease> {
         producer: &Producer,
     ) -> Result<()> {
         let ticket = producer.read_ticket().ok_or(Error::Clock)?;
+        Self::observe_with_ticket(
+            owner,
+            lease,
+            port,
+            selector,
+            generation,
+            (clock, producer, ticket),
+        )
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) fn observe_with_ticket(
+        owner: &'turn mut RecoveredOwner<'lease>,
+        lease: &'lease ProfileLease,
+        port: &mut PeerRecipientPort,
+        selector: Selector,
+        generation: u64,
+        (clock, producer, ticket): (PendingClock<'_>, &Producer, Ticket),
+    ) -> Result<()> {
         let proof = Self::borrow(owner, lease)
             .and_then(|mut turn| turn.read_pending(port, selector, generation, clock));
         match proof {

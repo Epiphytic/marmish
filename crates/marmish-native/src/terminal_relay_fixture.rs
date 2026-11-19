@@ -1180,6 +1180,19 @@ impl Relay {
             .count()
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn accepted_manual_control_count(&self, id: EventId) -> usize {
+        let state = self.state.lock().unwrap();
+        assert!(state.recipient_runtime);
+        state.observations.iter().filter(|observation| {
+            matches!(observation, Observation::Write(found, 7435, true) if *found == id)
+        }).count()
+    }
+
     /// Classify the historical request transcript for the exact authenticated
     /// active recipient socket. Includes history requests already closed.
     #[cfg(all(

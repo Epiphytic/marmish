@@ -181,6 +181,12 @@ impl Producer {
         self.begin(false, ClockOrigin::now)
     }
 
+    pub(crate) fn invalidate(&self) {
+        if let Ok(mut inner) = self.0.view.lock() {
+            inner.advance();
+        }
+    }
+
     pub(crate) fn refuse(&self, ticket: Ticket) {
         if let Ok(mut inner) = self.0.view.lock()
             && self.0.stamp(&inner) == ticket.stamp

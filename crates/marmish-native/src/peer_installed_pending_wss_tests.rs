@@ -492,6 +492,7 @@ impl ObservationFixture {
             PendingClock::Candidate {
                 readiness: &self.readiness,
                 stop: &self.stop,
+                forwarding: None,
             },
             &self.producer,
         )

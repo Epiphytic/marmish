@@ -7,6 +7,7 @@ use crate::{
     peer_candidate_startup::Readiness,
     peer_invitation::{Error as Local, NativeWindow, Selector, receiver_inventory::RecoveredOwner},
     peer_quota_vfs::dispatch::ReceiverQuota,
+    peer_relay_trust::candidate_registration::ForwardingVerifier,
 };
 
 type LocalResult<T> = std::result::Result<T, Local>;
@@ -35,11 +36,14 @@ pub(in crate::peer_invitation) enum Cut {
     WakeBeforeCommit,
 }
 
+struct ConsentClock<'a> {
+    readiness: Readiness,
+    stop: Arc<AtomicBool>,
+    forwarding: Option<&'a ForwardingVerifier>,
+}
+
 impl PeerRecipientPort {
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "consumed by the separately mounted Manual actor")
-    )]
+    #[cfg(test)]
     pub(in crate::peer_invitation) async fn publish_managed_consent(
         &mut self,
         owner: &mut RecoveredOwner<'_>,
@@ -48,8 +52,42 @@ impl PeerRecipientPort {
         readiness: Readiness,
         stop: Arc<AtomicBool>,
     ) -> Publication {
-        self.publish_managed_consent_inner(owner, quota, selector, readiness, stop, |_| Ok(()))
-            .await
+        self.publish_managed_consent_inner(
+            owner,
+            quota,
+            selector,
+            ConsentClock {
+                readiness,
+                stop,
+                forwarding: None,
+            },
+            |_| Ok(()),
+        )
+        .await
+    }
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    pub(in crate::peer_invitation) async fn publish_manual_consent(
+        &mut self,
+        owner: &mut RecoveredOwner<'_>,
+        quota: &ReceiverQuota<'_>,
+        selector: Selector,
+        readiness: Readiness,
+        stop: Arc<AtomicBool>,
+        forwarding: &ForwardingVerifier,
+    ) -> Publication {
+        self.publish_managed_consent_inner(
+            owner,
+            quota,
+            selector,
+            ConsentClock {
+                readiness,
+                stop,
+                forwarding: Some(forwarding),
+            },
+            |_| Ok(()),
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -62,8 +100,18 @@ impl PeerRecipientPort {
         stop: Arc<AtomicBool>,
         cut: impl FnMut(Cut) -> LocalResult<()>,
     ) -> Publication {
-        self.publish_managed_consent_inner(owner, quota, selector, readiness, stop, cut)
-            .await
+        self.publish_managed_consent_inner(
+            owner,
+            quota,
+            selector,
+            ConsentClock {
+                readiness,
+                stop,
+                forwarding: None,
+            },
+            cut,
+        )
+        .await
     }
 
     async fn publish_managed_consent_inner(
@@ -71,17 +119,21 @@ impl PeerRecipientPort {
         owner: &mut RecoveredOwner<'_>,
         quota: &ReceiverQuota<'_>,
         selector: Selector,
-        readiness: Readiness,
-        stop: Arc<AtomicBool>,
+        clock: ConsentClock<'_>,
         mut cut: impl FnMut(Cut) -> LocalResult<()>,
     ) -> Publication {
         let prepared = self.use_current_native(|route| {
             let Some(queued) = owner.due_managed_consent(&route, selector)? else {
                 return Ok(None);
             };
-            let window = route
-                .window(readiness, stop, queued.target().deadline())
-                .map_err(|_| Local::Clock)?;
+            let signed_cutoff = queued.target().deadline();
+            let window = match clock.forwarding {
+                Some(forwarding) => {
+                    route.manual_window(clock.readiness, clock.stop, signed_cutoff, forwarding)
+                }
+                None => route.window(clock.readiness, clock.stop, signed_cutoff),
+            }
+            .map_err(|_| Local::Clock)?;
             Ok(Some((queued, window, route.horizon())))
         });
         let (queued, window, horizon) = match prepared.map_err(Local::from).and_then(|value| value)

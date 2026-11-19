@@ -1,8 +1,11 @@
 //! Exact-port, meter-backed observation and one durable recovery scan.
 
-#![allow(
-    dead_code,
-    reason = "the reviewed Manual daemon mount composes this ingress"
+#![cfg_attr(
+    not(marmish_peer_receiver_candidate),
+    allow(
+        dead_code,
+        reason = "the installed Manual actor uses the candidate target"
+    )
 )]
 
 use std::sync::{
@@ -158,7 +161,7 @@ impl Ingress {
         &mut self,
         owner: &mut RecoveredOwner<'_>,
         port: &mut PeerRecipientPort,
-        deadline: Instant,
+        deadline: Option<Instant>,
     ) -> Result<bool> {
         let current = std::mem::replace(&mut self.recovery, Recovery::Failed);
         self.check(owner, port)?;
@@ -166,9 +169,11 @@ impl Ingress {
             return Err(Error::Binding);
         };
         self.drain_buffered(owner, port)?;
-        let deadline = self
-            .guard
-            .before_io(port, deadline.min(Instant::now() + PAGE_WAIT))?;
+        let page_limit = Instant::now() + PAGE_WAIT;
+        let deadline = self.guard.before_io(
+            port,
+            deadline.map_or(page_limit, |deadline| deadline.min(page_limit)),
+        )?;
         let result = port.page([cursor.lower, cursor.until], deadline).await;
         self.guard.check()?;
         let page = result?;
@@ -191,6 +196,7 @@ impl Ingress {
         owner: &mut RecoveredOwner<'_>,
         port: &mut PeerRecipientPort,
         deadline: Instant,
+        before_record: impl FnOnce(),
     ) -> Result<Option<Status>> {
         let current = std::mem::replace(&mut self.recovery, Recovery::Failed);
         if matches!(current, Recovery::Failed) {
@@ -209,7 +215,10 @@ impl Ingress {
         self.check(owner, port)?;
         let outcome = live
             .as_ref()
-            .map(|live| self.ingest(owner, port, Input::Live(live)))
+            .map(|live| {
+                before_record();
+                self.ingest(owner, port, Input::Live(live))
+            })
             .transpose()?;
         self.check(owner, port)?;
         // Even an idle timeout must still be in the physical attestation window.

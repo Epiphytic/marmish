@@ -113,7 +113,7 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
             // The oversized actual WSS response cannot establish checked EOSE.
             relay.recipient_fault(RecipientFault::OversizedHistory);
         }
-        let outcome = ingress.history_turn(owner, port, deadline()).await;
+        let outcome = ingress.history_turn(owner, port, Some(deadline())).await;
         if case == "ingress-backlog" {
             use crate::peer_invitation::{receiver_inventory::Error, store::Error as CursorError};
             assert!(matches!(
@@ -132,13 +132,28 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
         // No page revision or retry or custody row was advanced on either error.
         assert_eq!(after_page[0], before_page[0]);
         assert_eq!(&after_page[4..], &before_page[4..]);
-        assert!(ingress.live_turn(owner, port, deadline()).await.is_err());
+        assert!(
+            ingress
+                .live_turn(owner, port, deadline(), || {})
+                .await
+                .is_err()
+        );
         assert_eq!(writes(), before + 4);
         return;
     }
 
-    assert!(!ingress.history_turn(owner, port, deadline()).await.unwrap());
-    assert!(ingress.history_turn(owner, port, deadline()).await.unwrap());
+    assert!(
+        !ingress
+            .history_turn(owner, port, Some(deadline()))
+            .await
+            .unwrap()
+    );
+    assert!(
+        ingress
+            .history_turn(owner, port, Some(deadline()))
+            .await
+            .unwrap()
+    );
     assert_eq!(writes(), before + 4);
 
     let message = offer(15, now);
@@ -149,17 +164,28 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
             .unwrap()
     );
     assert!(matches!(
-        ingress.live_turn(owner, port, deadline()).await.unwrap(),
+        ingress
+            .live_turn(owner, port, deadline(), || {})
+            .await
+            .unwrap(),
         Some(consent_checkpoint::Status::Accepted(_))
     ));
     assert_eq!(
-        ingress.live_turn(owner, port, deadline()).await.unwrap(),
+        ingress
+            .live_turn(owner, port, deadline(), || {})
+            .await
+            .unwrap(),
         None
     );
     assert_eq!(writes(), before + 5);
 
     stop.store(true, std::sync::atomic::Ordering::Release);
-    assert!(ingress.live_turn(owner, port, deadline()).await.is_err());
+    assert!(
+        ingress
+            .live_turn(owner, port, deadline(), || {})
+            .await
+            .is_err()
+    );
     assert_eq!(writes(), before + 5);
 }
 
@@ -174,7 +200,7 @@ pub(super) async fn measured_delivery(
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         if ingress
-            .live_turn(owner, fixture.port, deadline)
+            .live_turn(owner, fixture.port, deadline, || {})
             .await
             .unwrap()
             == Some(consent_checkpoint::Status::Deferred)

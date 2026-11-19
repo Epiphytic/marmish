@@ -6,6 +6,9 @@ use tokio::{
     net::UnixStream,
 };
 
+#[path = "peer_daemon_manual_recipient_wss_tests.rs"]
+mod manual;
+
 const PROBE_CONNECTIONS: usize = 4;
 const PROVISIONAL_HOLD: Duration = Duration::from_secs(2);
 
@@ -59,6 +62,24 @@ pub(crate) async fn recipient_live(peer: &Relay, signer: PublicKey, round: usize
     assert_eq!(peer.qualification_connections(), socket);
     assert!(peer.runtime_socket_active(socket));
     socket
+}
+
+async fn manual_recipient_live(peer: &Relay, signer: PublicKey, socket: usize) {
+    eventually("authenticated live and recovery requests", || {
+        peer.recipient_runtime_requests(socket, signer)
+            .is_some_and(|requests| requests.live >= 1 && requests.history >= 1)
+    })
+    .await;
+    assert_manual_requests(peer, signer, socket);
+    assert!(peer.authenticated(signer));
+    assert!(peer.runtime_socket_active(socket));
+}
+
+fn assert_manual_requests(peer: &Relay, signer: PublicKey, socket: usize) {
+    let requests = peer.recipient_runtime_requests(socket, signer).unwrap();
+    assert_eq!(requests.live, 1);
+    assert!(requests.history >= 1);
+    assert_eq!(requests.unexpected, 0);
 }
 
 async fn unavailable(socket: &Path) {
@@ -167,7 +188,14 @@ async fn fresh_idle_recipient(mode: &'static str) {
     );
     drop(report);
     wait_active(&mut child, &socket).await;
-    let background_peer = recipient_live(&peer, signer, 1).await;
+    let manual = mode == "--manual-recipient";
+    let background_peer = if manual {
+        let socket = PROBE_CONNECTIONS + 1;
+        manual_recipient_live(&peer, signer, socket).await;
+        socket
+    } else {
+        recipient_live(&peer, signer, 1).await
+    };
     assert!(std::fs::metadata(&cursor).unwrap().len() > 0);
     let peer_startup = begin.elapsed();
     unavailable(&socket).await;
@@ -191,7 +219,11 @@ async fn fresh_idle_recipient(mode: &'static str) {
     let second_command = begin.elapsed();
     assert!(ordinary.publication_attempts(445) > ordinary_before);
     assert_eq!(peer.qualification_connections(), background_peer);
-    assert_eq!(peer.recipient_requests(signer), 1);
+    if manual {
+        assert_manual_requests(&peer, signer, background_peer);
+    } else {
+        assert_eq!(peer.recipient_requests(signer), 1);
+    }
     wait_active(&mut child, &socket).await;
     unavailable(&socket).await;
     child.stop().await;
@@ -204,7 +236,13 @@ async fn fresh_idle_recipient(mode: &'static str) {
     inherit_unrelated_three(&mut foreground, &null);
     let mut foreground = OwnedChild(foreground.spawn().unwrap());
     wait_active(&mut foreground, &socket).await;
-    let foreground_peer = recipient_live(&peer, signer, 2).await;
+    let foreground_peer = if manual {
+        let socket = PROBE_CONNECTIONS + 2;
+        manual_recipient_live(&peer, signer, socket).await;
+        socket
+    } else {
+        recipient_live(&peer, signer, 2).await
+    };
     assert_eq!(
         std::fs::read_link(format!("/proc/{}/fd/3", foreground.0.id())).unwrap(),
         Path::new("/dev/null"),
@@ -221,7 +259,9 @@ async fn fresh_idle_recipient(mode: &'static str) {
     let stop = begin.elapsed();
     assert!(!peer.runtime_socket_active(foreground_peer));
     assert_eq!(peer.qualification_connections(), foreground_peer);
-    assert_eq!(peer.recipient_closes(signer), 0);
+    if !manual {
+        assert_eq!(peer.recipient_closes(signer), 0);
+    }
     assert!(!socket.exists());
 
     let mut stock = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
