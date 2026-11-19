@@ -531,14 +531,18 @@ async fn managed_consent_transaction_refuses_each_exclusive_deadline() {
         let consent = codec()
             .open_consent(&f.server, signed.frame(), &offer.flight, at)
             .unwrap();
+        {
+            let mut cp = open(&f, &f.client, A, Policy::default()).unwrap();
+            let source = cp.bind_source(A).unwrap();
+            assert_eq!(
+                f.submit(&mut cp, &source, &offer),
+                Status::Accepted(TrustedOutcome::Applied),
+                "{cutoff}"
+            );
+        }
         let mut cp =
             open_custody(&f, &f.client, A, Policy::default(), ReceivePolicy::Manual).unwrap();
         let source = cp.bind_source(A).unwrap();
-        assert_eq!(
-            f.submit(&mut cp, &source, &offer),
-            Status::Accepted(TrustedOutcome::Applied),
-            "{cutoff}"
-        );
         let reservation = cp.reserve_provisioning(&source, key, at).unwrap();
         let stage = cp.bind_stage(&source, &reservation, at).unwrap();
         let witness = FileWitness {
