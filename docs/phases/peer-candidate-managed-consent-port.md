@@ -71,7 +71,8 @@ checkpoint, new issuer, parallel task, reconnect or second attempt.
    through `settle_managed_consent`, which compares account, route,
    carrier, generation and exclusive deadline, re-digests, and
    enters the exact attempt CAS with the old window as precommit
-   fence. Reuse the actual ACK wall in settlement. Scope/clock
+   fence. Copy the exact attempt `Operation` before consuming the turn
+   so the wake can compare it with the second scoped observation. Reuse the actual ACK wall in settlement. Scope/clock
    failures after physical exposure retire the port and result in
    possibly exposed. A negative relay ACK never settles. Lost,
    mismatched or late ACK, aborted exposure and local settlement
@@ -86,37 +87,64 @@ checkpoint, new issuer, parallel task, reconnect or second attempt.
 
 Successful settlement alone returns the non-Clone `SettledConsent`.
 Synchronously use a second fresh `use_accepted` observation of the
-exact same port and acknowledgement, compare it with the original
-attempt's exact carrier and generation, and consume the settled token
-through the existing `wake_installed_delivery` proof. Keep the same
-original native window and check it before wake and immediately before
-the wake transaction commits. The wake transaction already verifies
-its local owner, account, origin, selector, carrier and durable ACK
-wall and updates only existing FlightVerified retries bound to that
-origin and Consent carrier. Add a narrow last-commit hook to that
-transaction path and preserve existing callers via a no-op hook. It
-updates no rows belonging to other prerequisites and creates no
-work. No opening or processing of a deferred Delivery occurs here.
+exact same port and acknowledgement and compare the copied attempt
+`Operation` and exact carrier. Require the original native window
+before wake and immediately before commit. One-use authority comes
+from the consumed turn and durable CAS, then the consumed settled
+token. The bounded relay acknowledgement is borrowed only inside
+these two scoped observations and dropped on every return. During an
+ACK wait the raw reader observes physical route or fatal cancellation
+and the clamped deadline. Stop or readiness loss without such a wake
+is detected at the post-ACK permit recheck or the original deadline.
+
+The checked wake is currently reachable only through the test-only
+Delivery ingress mount. Extract its transaction into one child of
+`peer_pending_custody_checkpoint` under
+`all(any(test, marmish_peer_receiver_candidate), target_os = "linux",
+target_arch = "x86_64")`. Use existing source and local-owner checks
+and `custody_context`. In the transaction, verify the epoch, wall and
+quarantine with `Context::verify`. Check the exact installed parent
+with `installed::check_parent` and the exact signed queued ancestry
+with `Context::exact_consent`. Reject a missing parent or queue,
+terminalized or custodied selection, carrier mismatch, or missing,
+different or future durable ACK wall. Reuse the existing typed cursor
+error conversion. The candidate path needs none of `Ancestry`, saved
+Delivery, Delivery ingress, Held construction or native Welcome
+machinery. Keep the legacy test call using this same implementation
+with a no-op final fence. Make the managed port call consume the
+settled token after its independent checked ACK and original-window
+checks.
+
+Extend the internal cursor wake with a last-commit hook and preserve
+the old signature as a no-op wrapper. The existing indexed predicate
+updates only existing FlightVerified retries of that exact origin and
+Consent carrier, with a retry time strictly in the future. It creates
+no work and updates no other prerequisite. An injected precommit
+refusal rolls back the clock, retry time and cursor revision as one
+transaction. No opening or processing of a deferred Delivery occurs
+here.
 
 Return distinct typed outcomes for unavailable, definitely not sent,
 negative ACK, possibly exposed, and durably settled. A durably settled
 outcome can carry a fixed wake status (completed, including zero
-eligible rows, or failed). A failed wake keeps the ACK and deferred
-retry time intact, including rollbacks after an update but before
-commit. Preserve the periodic retry as the later recovery path. Drop
-the token after a failure and never wake on a foreign or stale ACK.
-If the original authority stopped after settlement, retire the port
-and suppress the wake without undoing the ACK. Distinguish a failed
-wake from an uncommitted or indeterminate settlement. Report only
-bounded error categories. Neither the permit nor the acknowledged
-or settled capabilities escape the one turn.
+eligible rows, or failed). If authority stopped after settlement,
+retire the port and suppress the wake without undoing the ACK. A wake
+transaction failure has its own outcome, including storage ambiguity.
+Drop the token and preserve the ACK. A settled row never re-enters
+publication, and there is no wake-only replay. After a missed wake or
+interruption between transactions, the existing independent deferred
+Delivery can run when its own persisted retry is due, with the current
+backoff capped at 60 seconds for each reschedule. Report only bounded
+error categories. No permit, ACK, or settled capability leaves the
+turn.
 
 ## Source ownership and validation
 
 Own one new child alongside `peer_recipient_port.rs` and its
 declaration, narrow accessors within `peer_managed_consent_turn.rs`
-and `peer_candidate_native_fence.rs`, and a small wake fence in
-`peer_installed_delivery_retry.rs` / `peer_cursor_retry.rs`. Reuse
+and `peer_candidate_native_fence.rs`, and the wake extraction and
+minimal transaction hook in the checkpoint and cursor files described
+above. Reuse
 private permit fields and the existing raw writer. Keep the prior
 fixture and legacy ingress paths test-only. Extend
 `peer_managed_consent_wss_tests.rs` only as needed, adding a separate
@@ -128,13 +156,23 @@ child test file if the new cases obscure the existing ACK proof.
   v2 queue and run the new non-fixture wrapper on that same port.
   Compare authenticated relay Consent flow and stored exact carrier,
   bytes or digest, and attempt/ACK persisted readback. Measure the
-  caller's bounded turn and separately report the relay observation.
-- Seed an already deferred retry through the existing checked
-  Delivery fixture path. If necessary only the fixture lender reads
-  the saved Consent early so an independent founder can prepare the
-  exact v2 Delivery ahead of the ACK. Keep its Welcome opaque to the
-  recipient and perform zero recipient Welcome effects. Keep a
-  separate unrelated deferred retry. A positive ACK wakes only the
+  caller's original five-second turn and remaining margin including
+  the package check, reserve, send, settlement and wake. Report the
+  relay observation separately.
+- Seed the matching deferred retry before opening the send window
+  using `observe_installed_delivery` and `finish_installed_delivery`
+  on the same managed checkpoint. Follow the existing
+  `peer_installed_delivery_wss_tests::observe_delivery` and real
+  stage-attestation pattern. A fixture-only lender can read the exact
+  queued frame so an independent founder prepares authenticated v2
+  Delivery while Consent is still unacknowledged. Check that the
+  observed prerequisite is the actual managed carrier before using
+  that row as evidence. Reuse the existing checked due-only retry to
+  obtain a future retry interval longer than the send window if
+  initial backoff is too short. Keep its Welcome opaque and perform
+  zero recipient Welcome effects. Use a separate checked prerequisite
+  for the unrelated retry, or a cursor-local fixture sentinel scoped
+  to a distinct prerequisite and explicitly report that oracle. A positive ACK wakes only the
   exact preexisting matching row. Read back ACK, matching retry
   time/revision, and unchanged unrelated scope. Repeating the same
   selection causes zero additional Consent writes or wakes.
@@ -155,7 +193,8 @@ child test file if the new cases obscure the existing ACK proof.
   false settled outcome, and physical stop/retirement. Reuse the
   existing exact stale and foreign ACK tests for dictionary-free
   proof of scope. Assert no native recipient Welcome work anywhere
-  in this fixture.
+  in this fixture. Reuse the existing
+  `fixture_late_acknowledgement` pattern for an owned accepted-ACK cut.
 - Run exact scoped registered WSS, existing managed checked-ACK and
   cursor fence tests, formatting and strict candidate and stock
   builds. Report actual coverage, timing, and any fixture-only
