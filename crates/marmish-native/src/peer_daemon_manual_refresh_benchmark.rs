@@ -465,7 +465,11 @@ fn report(
         && probe_counts.list == SAMPLE_COUNT / 2
         && probe_counts.show == SAMPLE_COUNT / 2
         && probe_counts.unexpected == 0
-        && (label != "independent" || probe_counts.exact == SAMPLE_COUNT);
+        && if label == "independent" {
+            probe_counts.exact == SAMPLE_COUNT
+        } else {
+            probe_counts.exact > 0
+        };
     println!(
         "manual_near_cap {}",
         json!({
@@ -488,12 +492,13 @@ fn report(
             "probe_latency_ns": percentiles(probes.iter().map(|result| result.latency_ns)),
             "pressure_offered_concurrency": if load.is_empty() { 0 } else { PRESSURE_WIDTH },
             "pressure_counts": load_counts,
+            "listener_reported_busy": load_counts.busy > 0 || probe_counts.busy > 0,
             "pressure_latency_ns": percentiles(load.iter().map(|result| result.latency_ns)),
         })
     );
     refresh_ok
         && probes_ok
-        && (label == "independent" || (!load.is_empty() && load_counts.unexpected == 0))
+        && (label == "independent" || (load_counts.exact > 0 && load_counts.unexpected == 0))
 }
 
 #[cfg(test)]
