@@ -30,9 +30,11 @@ owns the refresh cadence and stopped view lifecycle.
    stage, generation and saved image as before native readback, and exact
    native group, epoch, epoch identity and local leaf from the same charged
    Joined proof. Check the wall, Held time, Pending deadline, and native fence
-   again. The checked port also revalidates after its callback. Share the
-   exact row read and joined comparisons with the existing replay branch
-   where this retains its behavior.
+   again. After the SQL callback, explicitly recheck the current port account,
+   origin and wall before minting the projection. The existing callback checks
+   on entry. A final sample below the proof wall or at/after the Pending
+   deadline refuses. Share row and Joined comparisons with the existing replay
+   branch where this retains its behavior.
 4. Only the owner module can pair that result with its original ticket in a
    private non-Clone Pending observation. The view can consume the opaque
    pair and extract the redacted positive entry, verified wall and effective
