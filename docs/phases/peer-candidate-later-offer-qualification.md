@@ -4,7 +4,7 @@ Base `c6fed46`, with the installed product code unchanged from `b5c0671`.
 This is a test-only refinement of the local approval qualification. V2 Offer
 authoring allocates a fresh ID and the installed checkpoint permits one retained
 invitation per founder. A later valid same-founder Offer currently produces
-Backlog and does not replace Pending. The typed checkpoint and private replay
+Backlog and preserves the original Pending. The typed checkpoint and private replay
 tests already cover Backlog. The installed test will connect the exact wire
 event to the refusal and verify real file-backed custody across process restart.
 
@@ -27,8 +27,10 @@ Offer marker joined to the original invitation by server, origin, ID and
 revision, with original carrier. `snapshot_approval_pending` reuses the
 near-cap fixture's private hardened read-only opener but never constructs a
 `NearCapStage`. It reopens the stage by its checked witness to obtain its
-identity and digest. Do not grow or write the files. Use the real same founder socket and `publish_offer` again with a fresh
-deadline. Expose `Offered::flight` and test-only `Delivered::created_at` so the
+identity and digest. Use the same founder socket and `publish_offer` again
+with a fresh deadline. Wait for the fixture signing clock to advance beyond
+the authenticated Delivery time within the existing bounded wait.
+`Offered::flight` and test-only `Delivered::created_at` let the
 controller can assert different selector, exact author and recipient, and
 strictly increasing authenticated inner time after the original Delivery and
 Offer. The outer Nostr timestamps have independent randomized cover. Recovery
@@ -44,12 +46,12 @@ written with its true EOSE to the exact authenticated recipient connection and
 bounded kind-7435 recipient request. `watch_recipient_history` arms one
 passive capture for the expected connection/account/event. The relay reuses
 its existing classified accepted history subscription and records success
-only after its normal socket write loop completes the exact EVENT and EOSE
-batch. It suppresses no frames and introduces no delay or fault injection. After the same R/A/C startup, observe that response,
+after its normal socket write loop completes the exact EVENT and EOSE
+batch. After the same R/A/C startup, observe that response,
 the `manual_history` / `cursor` diagnostic and the retired Peer route with
-bounded waits. Local List/Show remain unavailable. A real same-UID approval request for the original
-selector after that observable failure must fail closed. This is a refusal
-during failed recovery, so the test does not require a queued-request timer race.
+bounded waits. Local List/Show remain unavailable. The exact same-UID
+approval request must return typed unavailability or EOF uncertainty after
+the worker exits.
 Run ordinary Command with exact bytes on the still-active child. Require exactly
 the three original Peer publications plus the later founder Offer, and no Peer
 publication on the ordinary relay.
@@ -58,12 +60,11 @@ Stop the second child before a fresh checked cursor read. Verify the same
 Pending selector, generation, held/expiry, exact stage identity and content,
 one saved original marker (the singleton exact original row also proves
 absence of the later marker), and unchanged count of deferred rows with no
-exact later carrier. A process may begin a new scan and raise wall floors, so
-the test does not equate whole cursor bytes or page revision. The lower-level
+exact later carrier. Recovery can begin a new scan and raise wall floors.
+The lower-level
 Backlog test already verifies page revision is untouched across the refused
 page transaction itself. New, moved or missing custody and any change to the
-keeper fail the checked snapshot comparison. Use expected child-scoped sanitized signals
-and RAII for all resources. The parent runs the exact linked source and private
-installed candidate test; static author review need not run a build or relay.
-This proof preserves the startup and trust paths. Supersession, a new terminal
-selection and public install support are outside this test.
+keeper fail the checked snapshot comparison. Use child-scoped sanitized
+signals and RAII for all resources. The integration run uses the reviewed
+test source and the installed private candidate. Supersession, terminal
+selection and public installation are separate product work.

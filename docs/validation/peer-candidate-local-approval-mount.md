@@ -145,3 +145,35 @@ was added.
 
 The combined candidate source passed locked all-target Clippy with warnings
 denied on Linux AMD64. The three installed scenarios are opt-in.
+
+## A later signed invitation during authenticated history
+
+The installed test passed in 62.05 s on Linux AMD64. It used the optimized
+candidate at `b5c0671` and the unoptimized qualification driver and libtest
+with candidate test source `ba92201`. The first installed daemon verified a
+Pending invitation and refused approval with an unrelated generation. After
+that daemon stopped, the same founder signed a later Offer for the recipient
+with a fresh Offer ID.
+
+The private relay wrote that exact Offer and EOSE on the restarted
+recipient's authenticated bounded history subscription. The receiver
+reported a cursor refusal and closed only its Peer worker and route.
+The approval of the original selection received no success and ordinary
+Command still returned the exact expected bytes. The relay saw exactly
+four control publications, including the second Offer.
+
+After shutdown, a read-only SQLCipher check found the same Pending
+selector, generation and retained MLS file, including its identity and
+digest. The original Offer marker remained the sole accepted Offer and
+there was no deferred row for the later carrier. The same custody
+comparison passed in an earlier 63.64 s run before adding the bounded
+signing-clock wait. The first attempt reached the cursor refusal, then
+stopped on a test assertion that expected Unavailable from the approval
+client. The revised test allows EOF uncertainty on the closed worker
+and checks refusal independently of the client error category.
+
+Current custody retains at most one invitation per founder. A second Offer
+aborts that recovery turn while preserving the original Pending. A future
+replacement policy would need its own durable transition and validation.
+Locked all-target Clippy with warnings denied passed for both the stock and
+candidate source on Linux AMD64.

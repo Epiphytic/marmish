@@ -159,9 +159,12 @@ file and decision after restart. Follow-up tests passed in both directions
 of the Manual v2 and Approval v3 startup refusal and recovered the committed
 decision after the CLI lost its first reply. The first instrumented loopback
 run measured 560 ms inside the daemon for approval, 466 ms for the immediate
-exact retry, and 1.07 s through the first CLI reply. The intent stays behind
-the private candidate qualification driver. Public approval, founder
-confirmation, automatic acceptance and installed heartbeats remain open.
+exact retry, and 1.07 s through the first CLI reply. An installed recovery
+test also confirmed that a later signed Offer from the same founder is
+refused during authenticated history and preserves the original Pending
+record and stage. The intent stays behind the private candidate
+qualification driver. Public approval, founder confirmation, automatic
+acceptance and installed heartbeats remain open.
 The [candidate VFS registration proof](validation/peer-candidate-preflight-registration.md)
 qualifies sealed receiver registration under the ordinary profile lease,
 forwards ordinary SQLite calls and fences reserved Peer database names. It

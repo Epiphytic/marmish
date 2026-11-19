@@ -101,8 +101,9 @@ operator ran the separate installed tests. The
 records exact package and harness provenance, both mismatch refusals,
 the committed decision recovered after reply loss, and internal timings.
 
-The private phase remains open for authenticated history when a later Offer
-arrives. Current one-invitation-per-founder custody refuses a later Offer
-while the original is retained. Replacement and its durable cutoff would
-need a separate reviewed transition. Receipt, group and heartbeat
-publication are outside this increment.
+The [later Offer review](peer-candidate-later-offer-qualification.md)
+covers authenticated history while the original Pending invitation is
+retained. Current one-invitation-per-founder custody refuses the new Offer
+and preserves the original. Replacement and its durable cutoff would need
+a separate reviewed transition. Authenticated founder convergence and
+receipt, group and heartbeat publication remain open.

@@ -25,10 +25,20 @@ loopback execution belong to the integration run.
   `761a34d1-7b0a-4b45-83a7-ff729c940edb` confirmed the original fixture
   clock and bounded polling. Either refusal is valid only while the
   checked post-stop snapshot still proves unchanged Pending.
+- The integrated source through `ba92201` received approval in session
+  `a2ff967e-6fad-421f-916d-f9ff339407a0`. The review checked the authenticated
+  history witness, the original Pending and keeper readback, ordinary
+  Command continuity and test-only isolation. It suggested separately
+  counting Consent invite, fence and outbox rows for broader coverage.
+  The fixture checks the exact approval state, Offer marker, deferred
+  row count, retained MLS file and relay publication count.
 
 The ignored candidate selector is
 `installed_registered_manual_later_offer_preserves_pending`. Its scope is
 normal authenticated private WSS history refusal, exact previously retained
 Pending custody and ordinary Command continuity. The current product rejects
-the later Offer. The test exercises no supersession or dispatcher loss.
+the later Offer and retains the original Pending.
 Focused Rust formatting and `git diff --check` passed at `817dd1e`.
+The [installed run](../validation/peer-candidate-local-approval-mount.md#a-later-signed-invitation-during-authenticated-history)
+passed with the integrated fixture. The reviewer identified authenticated
+founder convergence as the next design under the current custody policy.
