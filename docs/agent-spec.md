@@ -130,8 +130,12 @@ now covers an independent signed Offer, Consent and Delivery, the exact local
 Pending List/Show projection, a cold reopen and two preserved binary Command
 results across a Peer disconnection. It uses a private Linux AMD64
 qualification build and separate authenticated WSS origins. The stock
-launchers have no private mode flag. Public invitation approval, automatic
-acceptance, and heartbeats are still under development.
+launchers have no private mode flag. The [optimized near-cap
+qualification](validation/peer-candidate-near-cap-fixture.md#optimized-installed-qualification)
+restored the same Pending record from a 15.56 MiB SQLCipher image on Linux
+AMD64 and measured 20 scheduled refreshes per cohort, with and without local
+IPC load. Public invitation approval, automatic acceptance, and heartbeats
+are still under development.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)

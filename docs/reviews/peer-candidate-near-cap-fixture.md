@@ -47,3 +47,21 @@ the separately scheduled live exercise. It identified a temporary
 offline fixture directory retained inside its private scratch area.
 The reviewer removed that directory. The installed timing and footprint
 gates require separate evidence.
+
+## Optimized installed evidence review
+
+Claude Code Auto with Claude Sonnet 5.5, session
+`0a75ba4a-098b-4140-a408-29299b0dd063`, approved the evidence for
+the source-matched `9b30b76` driver and packages. The reviewer verified
+the package manifests and installed binary hashes, the logged metrics,
+charged image sizes, and the scheduled proof limits. The concurrent
+cohort establishes continuity under offered load. The separate
+deterministic listener test establishes what happens when all four slots
+are occupied. Its exact release-profile selector passed separately.
+
+The report now names the proof-age threshold, notes the sample size and
+collector-only timing cost, and identifies the fixture assertion that
+verified closure and unchanged original bytes. It omits the supplemental
+optimized hash timing. A reviewer-initiated rebuild exceeded local disk
+capacity and did not run the listener test. The already-built exact
+selector and the completed installed run supplied the runtime evidence.

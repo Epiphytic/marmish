@@ -56,5 +56,6 @@ SHA-256:
 
 These covered coalesced scheduling, actual accepted clock values, strict
 freshness, signed prior slack, fixed schema, argument placement and view
-regression. The mounted candidate, output overhead and near-cap qualification
-remain the installed controller's measurements.
+regression. The [installed near-cap report](peer-candidate-near-cap-fixture.md#optimized-installed-qualification)
+records the mounted release-profile candidate's refresh and IPC timings,
+output capture cost and exact image charge.
