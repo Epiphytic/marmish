@@ -497,8 +497,14 @@ pub(crate) async fn run(
 ) -> Result<()> {
     let mut channel = startup.as_ref().map(ChildChannel::take).transpose()?;
     let origin = ServiceLifetime::start(None)?;
+    let fixture_policy = fixture_roots.is_some().then(|| config.relay_policy.clone());
     let (prepared, eligible) = tokio::task::spawn_blocking(move || {
         let loaded = LoadedProfile::load(config, origin)?;
+        if fixture_policy.is_some_and(|policy| {
+            policy.urls() != loaded.policy.urls() || policy.mode() != loaded.policy.mode()
+        }) {
+            return Err(Error::Invalid("fixture_relay_trust"));
+        }
         let eligible = eligible(&loaded);
         Ok::<_, Error>((loaded.prepare()?, eligible))
     })
