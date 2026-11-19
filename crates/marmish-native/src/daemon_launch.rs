@@ -110,6 +110,15 @@ impl StartupReporter {
     }
 }
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "daemon_launch_candidate_child.rs"]
+#[allow(dead_code, reason = "registered daemon readiness remains unmounted")]
+pub(crate) mod candidate_child;
+
 fn valid_message(bytes: &[u8]) -> bool {
     !bytes.is_empty()
         && bytes.len() <= MESSAGE_LIMIT
