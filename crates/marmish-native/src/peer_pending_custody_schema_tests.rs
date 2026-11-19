@@ -1280,8 +1280,10 @@ fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
         assert!(outside.execute(APPROVE, (0, approved_at)).is_err());
 
         if permitted {
+            let inventory_before = f.inventory();
             assert_approval_verifier_refusals(&mut cp, &source, APPROVE, approved_at);
             assert_eq!(stored(), before);
+            assert_eq!(f.inventory(), inventory_before);
         }
 
         let writer = custody_schema::Writer::Update;
@@ -1363,15 +1365,29 @@ fn assert_approval_verifier_refusals(
 
     // Corrupt each coordinate independently in a transaction that rolls back.
     // This tests the read guard without relying on another trigger's verdict.
-    for (corruption, decision) in [("class=1", 0), ("mode=1", 0), ("mode=0", 1)] {
+    for (column, decision) in [(Some("class"), 0), (Some("mode"), 0), (None, 1)] {
         let tx = cp.cursor.begin(source.origin).unwrap();
         custody_schema::Writer::Update.guard(&tx, false).unwrap();
-        tx.execute_batch("DROP TRIGGER peer_custody_next").unwrap();
-        assert_eq!(
-            tx.execute(&format!("UPDATE peer_pending_custody SET {corruption}"), [])
+        tx.execute_batch("SAVEPOINT clean_approval").unwrap();
+        assert_eq!(tx.execute(approve, (0, approved_at)).unwrap(), 1);
+        custody_schema::verify_approval_rows(&tx).unwrap();
+        tx.execute_batch("ROLLBACK TO clean_approval; RELEASE clean_approval")
+            .unwrap();
+        if let Some(column) = column {
+            tx.execute_batch(
+                "DROP TRIGGER peer_custody_next;
+                 DROP TRIGGER peer_custody_reference_UPDATE",
+            )
+            .unwrap();
+            assert_eq!(
+                tx.execute(
+                    &format!("UPDATE peer_pending_custody SET {column}=1 WHERE {column}=0"),
+                    [],
+                )
                 .unwrap(),
-            1
-        );
+                1
+            );
+        }
         let refusal = tx.execute(approve, (decision, approved_at)).unwrap_err();
         assert!(
             matches!(refusal, rusqlite::Error::SqliteFailure(_, Some(ref message))
