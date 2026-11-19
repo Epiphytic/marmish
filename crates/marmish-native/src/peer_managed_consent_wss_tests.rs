@@ -321,7 +321,7 @@ async fn managed_consent_ack_child() {
         assert_eq!(fs::read(&cursor).unwrap(), before);
         assert_eq!(
             port.fixture_late_acknowledgement(ack),
-            Err(crate::peer_invitation::socket::Failure::Deadline)
+            Err(crate::peer_invitation::socket::wire::Failure::Deadline)
         );
     } else {
         let queued = owner

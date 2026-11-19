@@ -240,7 +240,14 @@ impl Checkpoint {
             Some(queue_refusal)
         );
         assert_eq!(self.consent_fixture_clocks(), floors);
-        assert!(!outbox::exists(&self.cursor.conn, key, origin).unwrap());
+        assert!(
+            !outbox::exists(
+                &self.cursor.conn.unchecked_transaction().unwrap(),
+                key,
+                origin
+            )
+            .unwrap()
+        );
         let queued = self
             .queue_exact_prepared(source, reservation, signed(), before_expiry, true, |_| {
                 Ok(())
@@ -260,9 +267,12 @@ impl Checkpoint {
             Some(Error::Expired)
         );
         assert_eq!(self.consent_fixture_clocks(), floors);
-        let persisted = outbox::load(&self.cursor.conn, &queued.prepared)
-            .unwrap()
-            .unwrap();
+        let persisted = outbox::load(
+            &self.cursor.conn.unchecked_transaction().unwrap(),
+            &queued.prepared,
+        )
+        .unwrap()
+        .unwrap();
         assert!(persisted == queued.row);
     }
 
@@ -285,9 +295,12 @@ impl Checkpoint {
             Some(Error::Custodied)
         );
         assert_eq!(self.consent_fixture_clocks(), floors);
-        let persisted = outbox::load(&self.cursor.conn, &queued.prepared)
-            .unwrap()
-            .unwrap();
+        let persisted = outbox::load(
+            &self.cursor.conn.unchecked_transaction().unwrap(),
+            &queued.prepared,
+        )
+        .unwrap()
+        .unwrap();
         assert!(persisted == queued.row);
     }
 }
