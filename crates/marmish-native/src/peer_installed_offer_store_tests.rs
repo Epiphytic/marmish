@@ -547,28 +547,29 @@ async fn managed_consent_transaction_refuses_each_exclusive_deadline() {
             inode: [2; 8],
         };
         cp.start_stage(&source, &stage, witness, at).unwrap();
-        cp.record_prepared(
-            &source,
-            &stage,
-            witness,
-            Artifact::new(consent.binding().event_id, &package, offer_end + 600),
-            at,
-        )
-        .unwrap();
+        let artifact = Artifact::new(consent.binding().event_id, &package, offer_end + 600);
         if cutoff == "artifact" {
-            // Current issuance requires a package valid beyond the Offer.
-            // Shorten only the stored fixture cutoff to exercise its guard
-            // separately. The signed Consent ends at the boundary too.
+            // The schema is monotonic. Inject the shortened cutoff only at
+            // the fixture's NativeStarted-to-Prepared transition. Real
+            // issuance requires an artifact valid beyond the Offer.
             assert_eq!(
                 cp.cursor
                     .conn
                     .execute(
-                        "UPDATE peer_provisional_stage_v1 SET package_expires=?1 WHERE state=2",
-                        [i64::try_from(boundary).unwrap()],
+                        "UPDATE peer_provisional_stage_v1 SET state=2, package_id=?1,
+                            package_digest=?2, package_expires=?3 WHERE class=0 AND state=1",
+                        params![
+                            artifact.id,
+                            artifact.digest,
+                            i64::try_from(boundary).unwrap()
+                        ],
                     )
                     .unwrap(),
                 1
             );
+        } else {
+            cp.record_prepared(&source, &stage, witness, artifact, at)
+                .unwrap();
         }
         cp.fixture_assert_managed_consent_boundaries(
             &source,
