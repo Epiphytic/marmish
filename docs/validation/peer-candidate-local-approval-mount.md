@@ -76,9 +76,72 @@ ordinary command results from the profile.
 | Ordinary command after Peer route close | 3,872 ms |
 
 These are single-run loopback measurements. The CLI timing includes process
-startup and foreground waiting. An internal decision-only latency was not
-measured. The test does not activate a server or publish a receipt, heartbeat
-or group message. Installed old-epoch startup refusal, a committed reply
-lost in flight and mutations during authenticated history still lack
-composed live coverage. Their underlying schema, local socket and SQL
-transaction tests are separate evidence.
+startup and foreground waiting. The test stops at the local decision that
+records Activating. Receipt, heartbeat and group publication remain separate
+qualification work.
+
+## Internal decision measurement
+
+The follow-up used optimized candidate CLI, daemon and worker from
+`b5c0671`, the stock package from `06f7de7`, and an unoptimized
+qualification driver and libtest for the same candidate stamp. The libtest
+included test-only changes through `b24e71d`. The first run stopped before
+Consent with the diagnostic `manual_package / clock`. The same installed
+package and test reran successfully in 62.84 s.
+
+| Measurement | Elapsed |
+| --- | ---: |
+| First Offer through verified Pending | 22,843 ms |
+| Installed CLI process launch through first approval reply | 1,071 ms |
+| Daemon decision on the first approval | 559.935 ms |
+| Immediate exact retry at the Unix socket | 544 ms |
+| Daemon decision on the immediate exact retry | 465.560 ms |
+| Cold restart through exact retry and projection check | 4,242 ms |
+
+The daemon samples only its approval decision. IPC queueing, listener and
+CLI process time are outside that interval. Both internal samples came from
+the first daemon, with `--debug` logging only the duration and event schema.
+The cold restart measurement remains an end-to-end sample. The positive
+case also passed with the integrated test code through `824623d` in
+66.50 s. It measured 572.528 ms inside the daemon for the decision,
+439.125 ms for the exact retry, and 1,124 ms through the first CLI reply.
+These two passing samples leave the earlier clock refusal unexplained
+and are insufficient to estimate a latency distribution.
+
+## Installed schema isolation
+
+The composed test passed in 34.27 s with the same candidate and qualification
+driver and the test code through `824623d`. It created two fresh profiles
+through the installed daemon, one with Manual v2 and one with Approval v3.
+Each original mode established authenticated subscriptions before stopping.
+The opposite mode then lost its Peer worker locally before dialing the
+registered relay, with the ordinary local socket still active. The test
+checked that neither refusal acknowledged an approval or changed any cursor
+bytes. The matching mode reopened the same cursor and again established
+authenticated subscriptions. The relay observed no control publications.
+
+The initial installed schema run attributed an EOF after the Peer worker
+closed to an explicit Unavailable reply. The client instead returned
+Uncertain. The corrected test accepts either refusal while separately
+checking the worker exit, zero new relay traffic and unchanged cursor.
+
+## Committed local reply lost
+
+The composed test passed in 65.61 s using the same optimized candidate and
+stock binaries with the unoptimized test harness through `824623d`. The
+installed CLI submitted the legitimate approval through a one-connection
+same-UID test socket. The test verified the daemon's successful reply for the
+exact selection before dropping the connection to the CLI. The CLI returned
+exit 1, empty stdout and `marmish: operation_uncertain` in 962 ms.
+
+The first cold SQLCipher check found the committed Activating row and original
+keeper before any retry. After restart the installed CLI repeated the exact
+request on the daemon socket and reported success in 790 ms. The second cold
+check found the same decision timestamp and keeper and both wall floors
+remained monotonic. The Peer relay still counted exactly three enrollment
+control publications. Two ordinary commands returned the exact bytes and
+the stock daemon reopened both records. No product fault-injection option
+was added.
+
+The combined candidate source passed locked all-target Clippy with warnings
+denied on Linux AMD64. The three installed scenarios are opt-in.

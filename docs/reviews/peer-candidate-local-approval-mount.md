@@ -77,8 +77,32 @@ The separate standalone cursor crate also includes the test-only binding
 source. Follow-up `50ab8b7` limits the compatibility correction to that
 fixture's visibility and leaves its body unchanged.
 
-The full design gate remains open. The reviewer asked for composed evidence
-of opposite-epoch startup refusal, lost-reply recovery and authenticated
-history supersession, plus internal decision timing. Existing isolated
-tests and installed happy-path restart evidence cover separate parts of
-those cases. The publication approval leaves the private scope intact.
+## Follow-up timing and recovery review
+
+Claude Code Sonnet 5.5 Auto approved `b5c0671` in session
+`291b8bcb-b573-4c76-86d9-e1efd06ae4f3`. It confirmed the timing boundary
+and the fixed debug log fields. The test now reads a complete bounded log
+to avoid cutting off the two approval readings.
+
+Claude Code Sonnet 5.5 Auto reviewed the schema fixture in session
+`6017c302-8a4f-4d17-ba1c-0866280bf1a3`. We applied the bounded log reader
+to the schema check, handled an exiting task during enumeration, and
+documented the matching startups and unchanged cursor as the schema
+evidence. The local exit diagnostic indicates where the worker refused.
+Claude Code Opus 5.5 Auto also approved the
+[withheld-reply fixture](peer-candidate-approval-reply-loss.md).
+
+Claude Code Sonnet 5.5 Auto reviewed the integrated source through
+`824623d` in session `2a921183-ffd4-4ffb-883a-c09ae239271c`. It approved
+the code, including the candidate timing, the corrected schema assertions
+and the exact dropped-reply mechanism. The reviews were static and the
+operator ran the separate installed tests. The
+[validation report](../validation/peer-candidate-local-approval-mount.md)
+records exact package and harness provenance, both mismatch refusals,
+the committed decision recovered after reply loss, and internal timings.
+
+The private phase remains open for authenticated history when a later Offer
+arrives. Current one-invitation-per-founder custody refuses a later Offer
+while the original is retained. Replacement and its durable cutoff would
+need a separate reviewed transition. Receipt, group and heartbeat
+publication are outside this increment.

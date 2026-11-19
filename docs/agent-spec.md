@@ -155,8 +155,11 @@ The [installed candidate approval proof](validation/peer-candidate-local-approva
 adds a same-UID `marmish servers approve` decision in a fresh private Linux
 AMD64 approval profile. The installed run recorded the exact selection as
 Activating, withheld the old Pending proof, and verified the original MLS
-file and decision after restart. CLI approval took 799 ms and the immediate
-Unix socket retry took 289 ms in one loopback run. The intent stays behind
+file and decision after restart. Follow-up tests passed in both directions
+of the Manual v2 and Approval v3 startup refusal and recovered the committed
+decision after the CLI lost its first reply. The first instrumented loopback
+run measured 560 ms inside the daemon for approval, 466 ms for the immediate
+exact retry, and 1.07 s through the first CLI reply. The intent stays behind
 the private candidate qualification driver. Public approval, founder
 confirmation, automatic acceptance and installed heartbeats remain open.
 The [candidate VFS registration proof](validation/peer-candidate-preflight-registration.md)
