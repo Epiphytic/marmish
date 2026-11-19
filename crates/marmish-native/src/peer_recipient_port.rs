@@ -330,6 +330,25 @@ impl PeerRecipientPort {
 }
 
 impl PeerRecipientPort {
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(in crate::peer_invitation) fn retired_fixture() -> Self {
+        Self(Owner {
+            socket: None,
+            scope: Arc::new(Scope {
+                origin: String::new(),
+                recipient: [0; 32],
+                namespace: [0; 16],
+                live: AtomicBool::new(false),
+            }),
+            live_id: String::new(),
+            next_page: 0,
+            recovery_claimed: false,
+            live_records: VecDeque::new(),
+            live_reserve: Reserve::default(),
+            groups: groups::GroupLane::default(),
+        })
+    }
+
     pub(in crate::peer_invitation) async fn open(
         admission: ReceiverRouteAdmission,
         deadline: Instant,

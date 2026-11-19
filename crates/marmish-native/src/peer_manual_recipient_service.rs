@@ -69,14 +69,7 @@ struct ManualService<'turn, 'profile, 'guard> {
 
 impl ManualService<'_, '_, '_> {
     fn check(&self) -> Result<(), Exit> {
-        let fatal = final_exit(self.fence.forwarding, Exit::LocalUnavailable) == Exit::GlobalFault;
-        classify_stop(
-            fatal,
-            self.stop.load(Ordering::Acquire),
-            self.fence.stop.is_cancelled(),
-            self.fence.ready.is_current(),
-        )
-        .map_or(Ok(()), Err)
+        check_lifecycle(self.fence, self.stop)
     }
 
     fn effect_failed(&self, stage: &'static str, error: super::super::Error) -> Exit {
@@ -273,10 +266,9 @@ impl ManualService<'_, '_, '_> {
     }
 
     fn check_approval_port(&mut self) -> Result<(), Exit> {
-        self.check()?;
-        let current = self.port.use_current_native(|_| ());
-        self.check()?;
-        current.map_err(|_| Exit::LocalUnavailable)
+        let fence = &*self.fence;
+        let stop = self.stop;
+        check_approval_port(self.port, || check_lifecycle(fence, stop))
     }
 
     async fn managed(&mut self, work: ManualDue, readiness: &Readiness) -> Result<bool, Exit> {
@@ -403,6 +395,27 @@ impl ManualService<'_, '_, '_> {
         };
         (self.check(), outcome, accepted)
     }
+}
+
+fn check_lifecycle(fence: &StartupFence<'_>, stop: &AtomicBool) -> Result<(), Exit> {
+    let fatal = final_exit(fence.forwarding, Exit::LocalUnavailable) == Exit::GlobalFault;
+    classify_stop(
+        fatal,
+        stop.load(Ordering::Acquire),
+        fence.stop.is_cancelled(),
+        fence.ready.is_current(),
+    )
+    .map_or(Ok(()), Err)
+}
+
+fn check_approval_port(
+    port: &mut PeerRecipientPort,
+    mut check_lifecycle: impl FnMut() -> Result<(), Exit>,
+) -> Result<(), Exit> {
+    check_lifecycle()?;
+    let current = port.use_current_native(|_| ());
+    check_lifecycle()?;
+    current.map_err(|_| Exit::LocalUnavailable)
 }
 
 fn approval_stop_category(
@@ -539,6 +552,37 @@ mod tests {
         ] {
             assert_eq!(approval_stop_category(result), Some(category));
         }
+    }
+
+    #[tokio::test]
+    async fn manual_approval_port_refusal_rechecks_lifecycle() {
+        let (startup, registration, worker) = crate::peer_candidate_startup::pair();
+        startup.ordinary_ready();
+        registration.registered();
+        let ready = worker.ready().await.unwrap();
+        let mut port = PeerRecipientPort::retired_fixture();
+        let refused: Result<(), _> =
+            port.use_current_native(|_| panic!("an unavailable route entered the decision"));
+        assert_eq!(refused, Err(PortFailure::Retired));
+
+        let mut observations = 0;
+        let exit = check_approval_port(&mut port, || {
+            observations += 1;
+            classify_stop(false, false, false, ready.is_current()).map_or(Ok(()), Err)
+        });
+        assert_eq!(exit, Err(Exit::LocalUnavailable));
+        assert_eq!(observations, 2);
+
+        observations = 0;
+        let exit = check_approval_port(&mut port, || {
+            observations += 1;
+            if observations == 2 {
+                startup.stop();
+            }
+            classify_stop(false, false, false, ready.is_current()).map_or(Ok(()), Err)
+        });
+        assert_eq!(exit, Err(Exit::Stopped));
+        assert_eq!(observations, 2);
     }
 
     #[test]
