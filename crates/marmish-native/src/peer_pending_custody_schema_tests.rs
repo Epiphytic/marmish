@@ -1363,7 +1363,7 @@ fn assert_approval_verifier_refusals(
 
     // Corrupt each coordinate independently in a transaction that rolls back.
     // This tests the read guard without relying on another trigger's verdict.
-    for (corruption, decision) in [("class=0", 0), ("mode=1", 0), ("mode=0", 1)] {
+    for (corruption, decision) in [("class=1", 0), ("mode=1", 0), ("mode=0", 1)] {
         let tx = cp.cursor.begin(source.origin).unwrap();
         custody_schema::Writer::Update.guard(&tx, false).unwrap();
         tx.execute_batch("DROP TRIGGER peer_custody_next").unwrap();

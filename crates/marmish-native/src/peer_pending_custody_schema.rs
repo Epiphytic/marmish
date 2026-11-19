@@ -41,7 +41,7 @@ BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
 CREATE TRIGGER peer_installed_custody_delete BEFORE DELETE ON peer_installed_custody_approval_v3
 BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
 CREATE TRIGGER peer_installed_custody_manual_approval BEFORE UPDATE ON peer_pending_custody
-WHEN NEW.state=3 AND (OLD.class IS NOT 1 OR OLD.mode IS NOT 0 OR NEW.approval IS NOT 0)
+WHEN NEW.state=3 AND (OLD.class IS NOT 0 OR OLD.mode IS NOT 0 OR NEW.approval IS NOT 0)
 BEGIN SELECT RAISE(ABORT,'installed custody requires Manual approval'); END;
 ";
 
@@ -476,7 +476,7 @@ pub(super) fn verify_approval_rows(tx: &Connection) -> std::result::Result<(), C
             AND NOT EXISTS (SELECT 1 FROM peer_pending_terminal)
             AND NOT EXISTS (
                 SELECT 1 FROM peer_pending_custody WHERE state=3
-                    AND (class IS NOT 1 OR mode IS NOT 0 OR approval IS NOT 0
+                    AND (class IS NOT 0 OR mode IS NOT 0 OR approval IS NOT 0
                         OR length(group_id) IS NULL OR length(group_id) NOT BETWEEN 1 AND 255
                         OR epoch_number IS NULL OR epoch_number<0
                         OR length(epoch_identity) IS NOT 32 OR own_leaf IS NULL
