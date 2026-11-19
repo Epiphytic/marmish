@@ -698,13 +698,12 @@ async fn healthy_owned_stop_reports_cut_during_final_cleanup_and_retains_lease()
         .ok()
         .unwrap();
     assert!(stopping.observe(deadline()).await.graceful_complete);
-    let mut retained = stopping
-        .complete(|| {
-            trip.notify();
-            Ok(())
-        })
-        .err()
-        .expect("post-cleanup admission must refuse success");
+    let Err(mut retained) = stopping.complete(|| {
+        trip.notify();
+        Ok(())
+    }) else {
+        panic!("post-cleanup admission must refuse success");
+    };
     assert!(Arc::strong_count(&fixture.lease) > 1);
     let report = retained.observe(deadline()).await;
     assert!(report.physical.all_complete());
@@ -765,4 +764,84 @@ async fn healthy_owned_stop_joins_real_started_engine_without_authorizing_cleanu
 #[tokio::test]
 async fn healthy_owned_stop_allows_cleanup_after_real_engine_quiescence() {
     stop_started_engine(true).await;
+}
+
+#[test]
+fn healthy_owned_stop_refuses_invalid_owner_without_effects() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    let fixture = Fixture::new();
+    let different = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let admission = Admission::new(&trip, || true);
+    let owner = open_healthy(&fixture, &trip, &admission);
+    let address = &*owner as *const MdkOwner;
+    let refused = |owner, lease| {
+        let owner = HealthyStop::begin(owner, lease, &admission).err().unwrap();
+        assert_eq!(address, &*owner as *const MdkOwner);
+        assert!(!owner.publication.blocked());
+        owner
+    };
+    let owner = refused(owner, &fixture.lease); // No current runtime.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    let mut owner = refused(owner, &different.lease);
+    owner.streams.stopping = true;
+    let mut owner = refused(owner, &fixture.lease);
+    assert!(owner.streams.stopping);
+    owner.streams.stopping = false;
+    let client = Keys::generate().public_key().to_bytes();
+    fixture.install_engine(
+        &mut owner,
+        &Admission::new(&trip, || true),
+        "wss://127.0.0.1:9/",
+        client,
+    );
+    let mut owner = refused(owner, &fixture.lease);
+    let mut worker = owner.take_engine_for_stop().unwrap();
+    assert!(
+        worker
+            .shutdown(std::time::Instant::now() + Duration::from_secs(5))
+            .unwrap()
+            .complete
+    );
+    owner.startup_custody.take().unwrap().close().unwrap();
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_rechecks_sticky_cut_during_graceful_preparation() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let fixture = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let checks = Arc::new(AtomicUsize::new(0));
+    let admission = Admission::new(&trip, {
+        let trip = trip.clone();
+        let checks = checks.clone();
+        move || {
+            if checks.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                count.checked_sub(1)
+            }) == Ok(1)
+            {
+                trip.mark_cut();
+            }
+            true
+        }
+    });
+    let owner = open_healthy(&fixture, &trip, &admission);
+    let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
+        .ok()
+        .unwrap();
+    checks.store(2, Ordering::Release);
+    let report = stopping.observe(deadline()).await;
+    assert_eq!(checks.load(Ordering::Acquire), 0);
+    assert!(report.physical.all_complete());
+    assert!(report.fatal && !report.graceful_complete);
+    assert!(
+        stopping
+            .complete(|| panic!("cut forbids cleanup effects"))
+            .is_err()
+    );
 }

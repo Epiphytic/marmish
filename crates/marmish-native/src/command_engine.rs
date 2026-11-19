@@ -648,13 +648,37 @@ impl CommandEngine {
         self.live_pending.contains(&stream)
     }
     pub(crate) fn gated_stop_for_test(gate: Receiver<()>) -> Self {
+        Self::stop_worker_for_test(move |_| {
+            let _ = gate.recv();
+        })
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn gated_candidate_stop_for_test(gate: Receiver<()>, admission: Admission) -> Self {
+        let mut engine = Self::gated_stop_for_test(gate);
+        engine.mode.checked = Some(admission);
+        engine
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn candidate_wait_for_two_stops_for_test(admission: Admission) -> Self {
+        let mut engine = Self::stop_worker_for_test(|controls| {
+            for _ in 0..2 {
+                assert!(matches!(controls.recv(), Ok(Control::Stop)));
+            }
+        });
+        engine.mode.checked = Some(admission);
+        engine
+    }
+
+    fn stop_worker_for_test(stop: impl FnOnce(Receiver<Control>) + Send + 'static) -> Self {
         let (operations, rx) = mpsc::sync_channel(CAPACITY);
         let (live_preparations, live_rx) = mpsc::sync_channel(LIVE_CAPACITY);
         let (controls, control_rx) = mpsc::sync_channel(CAPACITY);
         let (tx, events) = mpsc::sync_channel(CAPACITY);
         let worker = thread::spawn(move || {
-            let _ = gate.recv();
-            drop((rx, live_rx, control_rx, tx));
+            stop(control_rx);
+            drop((rx, live_rx, tx));
         });
         Self {
             operations,

@@ -88,6 +88,8 @@ impl HealthyStop {
         for runner in &runners {
             runner.suspend_input();
         }
+        // This candidate is Command-only. Stop the worker concurrently while
+        // draining any pre-existing stream state, with no completion egress.
         let engine = owner
             .take_engine_for_stop()
             .map_or(Engine::NeverStarted, |engine| {
@@ -108,6 +110,8 @@ impl HealthyStop {
         })
     }
 
+    /// The first deadline bounds the one graceful attempt. Later observations
+    /// can prove physical completion but never restart a failed graceful effect.
     pub(crate) async fn observe(&mut self, deadline: Instant) -> OwnerReport {
         self.engine
             .start_turn(&self.fatal, &self.lease, &self.runtime, deadline);
@@ -373,3 +377,7 @@ async fn observe_raw(owner: &MdkOwner, barrier: &mut Barrier, deadline: Instant)
         };
     }
 }
+
+#[cfg(test)]
+#[path = "mdk_owner_healthy_stop_tests.rs"]
+mod tests;
