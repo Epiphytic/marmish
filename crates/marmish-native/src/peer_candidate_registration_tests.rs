@@ -35,6 +35,10 @@ fn prepare(lease: &mut ProfileLease) -> IdentityMaterial {
 }
 
 fn start_profile() -> tempfile::TempDir {
+    start_profile_with_account(true)
+}
+
+fn start_profile_with_account(keep_account: bool) -> tempfile::TempDir {
     let root = tempfile::Builder::new()
         .permissions(fs::Permissions::from_mode(0o700))
         .tempdir()
@@ -45,6 +49,9 @@ fn start_profile() -> tempfile::TempDir {
     let owner = MdkOwner::open(&lease, &material, connector, vec![]).unwrap();
     lease.mark_ready(owner.opened_binding()).unwrap();
     drop(owner);
+    if !keep_account {
+        fs::remove_file(lease.mdk_database()).unwrap();
+    }
     lease.cleanup_runtime().unwrap();
     let config = serde_json::json!({
         "version":1, "role":"both", "relays":["wss://127.0.0.1:9/"], "tor":"off",
@@ -150,7 +157,7 @@ fn candidate_native_owner_startup_qualification() {
 
 fn run_registration_cases(modes: &[&str]) {
     for &mode in modes {
-        let root = start_profile();
+        let root = start_profile_with_account(mode != "owner_startup_cut_lifecycle_write");
         run_registration_case(root.path(), mode);
         if mode == "owner_startup_healthy" {
             run_registration_case(root.path(), "owner_startup_stock_reopen");
