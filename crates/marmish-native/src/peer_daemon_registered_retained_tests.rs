@@ -188,7 +188,8 @@ async fn retained() {
         ordinary_command_bytes(&sender_socket, signer, &relay, argv.clone(), FIRST, Some(1)).await;
     let first_time = clock.elapsed();
     let clock = Instant::now();
-    let second = ordinary_command_bytes(&sender_socket, signer, &relay, argv, SECOND, Some(2)).await;
+    let second =
+        ordinary_command_bytes(&sender_socket, signer, &relay, argv, SECOND, Some(2)).await;
     let second_time = clock.elapsed();
     assert_ne!(first, second);
     assert_marker(&marker);
