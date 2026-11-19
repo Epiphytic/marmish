@@ -27,3 +27,25 @@ never runs. These are acceptance details of the approved design.
 
 Both reviews were read-only and used the committed source. No Rust changed,
 and this review ran no build, tests or relay. No candidate was activated.
+
+## Integrated implementation review
+
+Claude Code Auto preliminary review of `6145a9c..76e5436`, session
+`7cceb085-36b6-4cc0-a9b2-5fcff7aaf091`, found that a fresh approval
+profile was first made v2 and that a previously initialized v2 profile
+could be promoted in place. The revision initializes fresh v3 cursor,
+installed Offer, and custody rows in one transaction. It refuses an
+opposite epoch before touching the persisted schema. Candidate coverage
+checks both directions and includes the actual installed approval CLI and
+SQLCipher inspection across restart.
+
+Claude Code Auto reviewed `06f7de7` in session
+`a4befe73-9838-415c-9be1-72c19c80c1a0`. The reviewer found no code-level
+blocker in the fresh transaction, v2 isolation, claim and lifecycle
+fences, typed request, or absence of authority activation. The review was
+static. It left installed test evidence and additional lifecycle and
+failure-path coverage open, including a committed response lost in
+transit and installed startup with the opposite cursor epoch. The
+subsequent compile correction `dca025b` uses checked integer conversion
+at the SQL test boundary and permits the standalone cursor fixture to
+compile the candidate attach entry point.
