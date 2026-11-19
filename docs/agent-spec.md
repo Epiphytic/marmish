@@ -153,6 +153,11 @@ covers the integrated shutdown path with an in-process real Command engine
 and the stock core regression selectors on Linux AMD64. A proved idle
 prelude hands the original owner and lease to physical stop, which gets a
 fresh observation slice for its graceful attempt.
+The [retained Command proof](validation/peer-candidate-idle-retained-proof.md)
+exercises two real ordinary commands over private WSS in an installed
+Linux AMD64 candidate. A separate stock installation reads both retained
+results from the same profile after a clean stop. The tests also confirm
+that each command's side effect occurred once and that the worker joined.
 
 **CI execution direction (2026-11-13):** prefer Epiphytic self-hosted runners;
 do not launch GitHub-hosted qualification as an implicit fallback. The

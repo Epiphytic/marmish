@@ -58,3 +58,25 @@ fixture layout feeds both worker and helper, receipt and class
 validation remain required, and the new stage logs contain fixed
 categories only. It was a static review during the author’s separate
 build and runtime validation.
+
+## Integrated review
+
+Claude Code Auto approved the composed source at
+`358662019ee0e3233ea1634a73ca4760a639cfb9` in static review
+`2f0104c8-20c2-4248-8027-55a7911cc9c7`. The merged passive and retained
+command fixture shares the exact invocation lookup, checks that there
+is no additional page, and checks the expected count at each retained
+result. The published replay preserves the reviewed native source exactly.
+
+Claude Code Auto also approved the same composed commit after running the
+installed retained selector in session
+`790c94c0-60f3-4bdb-aeb0-b9020ad66f3c`. It inspected the original commit
+by object ID during the replay and confirmed only evidence documents had
+changed. It verified exact manifests, separate install prefixes and both
+source stamps. The reviewer asked for the composition evidence to appear
+alongside the original test evidence. The
+[validation report](../validation/peer-candidate-idle-retained-proof.md)
+records the two composed runs. These private loopback Linux AMD64 samples
+do not estimate latency variation. The fixture passes the installed copy
+helper into the engine, while the executed commands use ordinary
+Command. The two local packages were unsigned and used pinned digests.
