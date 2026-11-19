@@ -35,10 +35,15 @@ reads follow this increment.
 
 ## Cut B. Own the registered service from startup to exit
 
-- Keep config and identity selection shared. Only the daemon start may
-  request registration. Resolve the actual relay policy and exclude effective
-  Tor before preparing a receiver. Follow the parent registration failure
-  table. Prepare on the original profile lease Arc. For exclusions or proved
+- Gate this phase on `marmish_peer_receiver_candidate` on Linux x86_64.
+  Only a private daemon startup entry may request registration. Installed
+  flags, environment and config have no switch to enable it. The disposable,
+  source-matched qualification executable invokes that entry from its test
+  driver, and uses the native installation layout and matching worker. The
+  stock executable and release artifacts have no registered entry.
+  Keep actual config and identity selection shared. Resolve the actual relay
+  policy and exclude effective Tor before preparing a receiver. Follow the
+  parent registration failure table. Prepare on the original profile lease Arc. For exclusions or proved
   Untouched failures, drop temporary witnesses, then unwrap the original
   lease and proceed on the stock path. Treat duplicate or uncertain
   registration as startup failure.
@@ -57,14 +62,20 @@ reads follow this increment.
   including a failure after returning from engine launch or binding the
   listener. Retain returned handles before another admission. Close input
   and discard queued work on entry to stop.
-- Reuse the existing IPC listener with the same Fatal and independent drain.
-  Borrow each socket inside the raw-stream fence for every frame read and
-  write. Check when classifying a completed request and before queue entry,
-  handing off a socket or serving cached Status. Fatal breaks accept and
-  retry while the owner is scheduled out. Close read authority and listener
-  before canceling and joining listener-owned tasks. In the candidate owner
-  prioritize the fatal wake over ready ordinary effects, replies and shutdown.
-- Registered Cut B starts no Terminal supervisor or intake. Its healthy
+- Call `ipc::serve_with_listener` with the candidate-only
+  `CandidateListener::registered(fatal, None)` and existing independent
+  drain receiver. This argument is independent of the fixture-only
+  `candidate_lifecycle::Listener` and the optional Peer read offer.
+  Stock `serve_inner` keeps using its ordinary wrapper. Borrow the accepted
+  UnixStream in the checked socket wrapper for each frame read and write.
+  Check after classification and before queue entry or handing off a socket.
+  Check the same Fatal on each socket write poll, including after a Status
+  snapshot was cloned and before its reply can begin. Fatal breaks accept
+  and retry while the owner is scheduled out. Close read authority and
+  listener before canceling and joining listener-owned tasks. In the
+  candidate owner prioritize fatal over ready effects, replies and shutdown.
+- Registered Cut B uses the shared startup path with Terminal disabled.
+  It starts no Terminal supervisor or intake. Its healthy
   TerminalStart response is terminal_unavailable. After the latch the
   connection can close without a response. Registered Terminal follows
   qualification of the room SQL and transport, Registry and physical Terminal
@@ -81,8 +92,13 @@ reads follow this increment.
   Skip deactivation, Journal/SQLCipher close and runtime-tree cleanup after
   loss. Park untrusted roots and the original lease through process exit.
   Failed or timed-out observations retain outstanding handles and preclude a
-  successful shutdown report. Prevent implicit native destructor execution
-  during runtime teardown on fatal.
+  successful shutdown report. On either startup or live fatal disposition,
+  retain this custody using ManuallyDrop or forget and terminate with a
+  nonzero exit after logging the physical outcome. Do not return through
+  main or Tokio runtime teardown. Do not use process exit as evidence that an
+  unresolved live child was reaped. If one might still own a child, keep custody
+  and continue physical observation before exit. The OS releases the retained
+  flock on process exit.
 
 ## Installed qualification
 
@@ -97,7 +113,8 @@ healthy restart and registered Terminal refusal while stock still runs Terminal.
 Force decisive real dispatcher loss before native opens, after engine launch
 and before successful startup reporting, during activation/dispatch/tick/room
 work, before a queued reply and while healthy stop is waiting for its worker.
-Check stale Status while the owner is scheduled out. Require actual socket and
+Check stale Status while the owner is scheduled out and separately with an
+admitted Status exchange paused after classification before reply. Require actual socket and
 worker dispositions, retained lease, unchanged native evidence after the last
 admitted effect and no successful report after failed admission. Obtain strict
 stock/candidate validation and exact integrated Claude Code Auto approval
