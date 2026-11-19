@@ -323,20 +323,25 @@ impl RegisteredStop {
         if let Phase::Prelude(slot) = &mut self.0 {
             let prelude = slot.as_mut().expect("owned prelude");
             prelude.observe(deadline).await;
-            if !matches!(prelude.state, State::Disposition { .. }) || Instant::now() >= deadline {
+            let State::Disposition { result, .. } = &prelude.state else {
+                return prelude.report();
+            };
+            let proved = matches!(result, Disposition::Proved);
+            if !proved && Instant::now() >= deadline {
                 return prelude.report();
             }
-            let IdlePrelude { state, intake, .. } = *slot.take().expect("proved disposition");
-            let State::Disposition { owner, result } = state else {
+            let IdlePrelude { state, intake, .. } = *slot.take().expect("observed disposition");
+            let State::Disposition { owner, .. } = state else {
                 unreachable!("disposition checked above");
             };
-            // Move the returned owner and exact retained lease together,
-            // without an await while either is out of its observation slot.
-            self.0 = Phase::Physical(Box::new(HealthyStop::from_prepared(
-                intake,
-                owner,
-                matches!(result, Disposition::Proved),
-            )));
+            // Transfer the returned owner and lease without awaiting. A proved
+            // prelude gives the single graceful attempt a fresh physical slice.
+            let physical = Box::new(HealthyStop::from_prepared(intake, owner, proved));
+            let handoff = proved.then(|| physical.report());
+            self.0 = Phase::Physical(physical);
+            if let Some(report) = handoff {
+                return report;
+            }
         }
         match &mut self.0 {
             Phase::Physical(physical) => physical.observe(deadline).await,

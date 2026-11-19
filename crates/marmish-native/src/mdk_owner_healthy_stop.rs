@@ -146,8 +146,8 @@ impl HealthyStop {
         }
     }
 
-    /// The first deadline bounds the one graceful attempt. Later observations
-    /// can prove physical completion but never restart a failed graceful effect.
+    /// The first physical observation bounds the one graceful attempt. Later
+    /// observations can prove physical completion without restarting that attempt.
     pub(crate) async fn observe(&mut self, deadline: Instant) -> OwnerReport {
         self.engine
             .start_turn(&self.fatal, &self.lease, &self.runtime, deadline);

@@ -887,6 +887,18 @@ async fn registered_idle_prelude_quiesces_real_engine_before_runtime_cleanup() {
         .ok()
         .expect("registered owner");
     assert_eq!(binding.fence.state(), FenceState::Retired);
+    let prelude_deadline = deadline();
+    let handoff = stop.observe(prelude_deadline).await;
+    assert!(Instant::now() < prelude_deadline);
+    assert!(handoff.physical.requires_process_hold());
+    assert!(!handoff.physical.all_complete());
+    assert!(!handoff.graceful_complete && !handoff.fatal);
+    let Err(stop) = stop.complete(|| panic!("pending stop cannot clean runtime")) else {
+        panic!("pending physical ownership must survive completion");
+    };
+    let mut stop = *stop;
+    assert_held(fixture.directory.path());
+    assert!(Arc::strong_count(&fixture.lease) > 1);
     let report = stop.observe(deadline()).await;
     assert!(report.physical.all_complete());
     assert!(report.graceful_complete && !report.fatal);
