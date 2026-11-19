@@ -1,3 +1,4 @@
+use super::super::write_frame;
 use super::*;
 use crate::terminal_ipc_wire::{self, Direction, Record};
 use std::os::unix::fs::PermissionsExt;

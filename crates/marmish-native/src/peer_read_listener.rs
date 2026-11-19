@@ -1,5 +1,5 @@
 //! Bounded access to the candidate's local read projection on its existing listener.
-use super::{Response, peer_read, write_frame};
+use super::{Response, SocketFence, peer_read};
 use crate::{
     dispatcher_fatal::Fatal,
     peer_candidate_startup::{ListenerRegistration, Readiness},
@@ -88,6 +88,7 @@ impl Intake {
         request: peer_read::Request,
         stream: &mut UnixStream,
         exchange_deadline: Instant,
+        fence: &SocketFence,
     ) {
         let admitted = self
             .current()
@@ -115,7 +116,7 @@ impl Intake {
                 Response::success,
             );
         if Instant::now() < exchange_deadline {
-            let _ = timeout_at(exchange_deadline, write_frame(stream, &response)).await;
+            let _ = timeout_at(exchange_deadline, fence.write(stream, &response)).await;
         }
         drop(admitted);
     }

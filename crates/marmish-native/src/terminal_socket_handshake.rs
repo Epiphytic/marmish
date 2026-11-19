@@ -1,6 +1,6 @@
 //! Same-UID ownership transfer for the local Terminal stream fixture.
 
-use super::{Request, Response, read_frame, verify_peer, write_frame, write_frame_body};
+use super::{Request, Response, SocketFence, read_frame, verify_peer, write_frame_body};
 use crate::mdk_adapter::terminal_live_enrollment::RELAY_AUTH_CHALLENGE_TIMEOUT;
 use crate::terminal_ipc_wire::Role;
 use crate::transport::{RelayPolicy, RouteMode, TransportLimits};
@@ -271,10 +271,15 @@ impl terminal_socket_session::ReadWrite for Attached {
     }
 }
 
-async fn refuse(mut stream: UnixStream, deadline: Instant, category: &'static str) {
+async fn refuse(
+    mut stream: UnixStream,
+    deadline: Instant,
+    category: &'static str,
+    fence: &SocketFence,
+) {
     let _ = timeout_at(
         deadline,
-        write_frame(&mut stream, &Response::failure(category)),
+        fence.write(&mut stream, &Response::failure(category)),
     )
     .await;
 }
@@ -285,23 +290,27 @@ pub(super) async fn transfer(
     stream: UnixStream,
     classify: OwnedSemaphorePermit,
     deadline: Instant,
+    fence: &SocketFence,
 ) {
     let Some(route) = route else {
         drop(classify);
-        refuse(stream, deadline, "terminal_unavailable").await;
+        refuse(stream, deadline, "terminal_unavailable", fence).await;
         return;
     };
     if request.validate().is_err() {
         drop(classify);
-        refuse(stream, deadline, "terminal_start_invalid").await;
+        refuse(stream, deadline, "terminal_start_invalid", fence).await;
         return;
     }
     let Ok(pending) = route.pending.try_acquire_owned() else {
         drop(classify);
-        refuse(stream, deadline, "terminal_capacity").await;
+        refuse(stream, deadline, "terminal_capacity", fence).await;
         return;
     };
     drop(classify);
+    if fence.tripped() {
+        return;
+    }
     let Ok(stream) = stream.into_std() else {
         return;
     };
@@ -322,7 +331,7 @@ pub(super) async fn transfer(
         } = error.into_inner();
         drop(_pending);
         if let Ok(stream) = UnixStream::from_std(stream) {
-            refuse(stream, deadline, reason).await;
+            refuse(stream, deadline, reason, fence).await;
         }
     }
 }
@@ -383,7 +392,7 @@ impl LocalStart {
             ..
         } = self;
         drop(pending);
-        refuse(stream, deadline, category).await;
+        refuse(stream, deadline, category, &SocketFence::default()).await;
     }
 
     pub(crate) async fn busy(self, offer: Offer) -> Result<()> {
