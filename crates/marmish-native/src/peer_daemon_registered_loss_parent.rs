@@ -88,14 +88,25 @@ async fn frame(control: &mut AsyncUnixStream, tag: u8, cap: usize, deadline: Ins
             .read_exact(&mut header)
             .await
             .expect("controller header");
-        assert_eq!(header[0], tag, "exact controller frame ordering");
         let len = u32::from_be_bytes(header[1..].try_into().unwrap()) as usize;
-        assert!(len <= cap, "controller frame bound");
+        let max = if header[0] == b'X' { 32 } else { cap };
+        assert!(len <= max, "controller frame bound");
         let mut body = vec![0; len];
         control
             .read_exact(&mut body)
             .await
             .expect("controller payload");
+        assert_eq!(
+            header[0],
+            tag,
+            "exact controller frame ordering, tag={} refusal={}",
+            char::from(tag),
+            if header[0] == b'X' {
+                std::str::from_utf8(&body).unwrap_or("invalid")
+            } else {
+                ""
+            }
+        );
         body
     })
     .await

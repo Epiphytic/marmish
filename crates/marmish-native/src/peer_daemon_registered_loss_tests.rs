@@ -52,10 +52,14 @@ struct ChildControl {
 static CONTROL: OnceLock<ChildControl> = OnceLock::new();
 
 fn refuse() -> ! {
+    refuse_at("control")
+}
+
+fn refuse_at(stage: &str) -> ! {
     if let Some(control) = CONTROL.get()
         && let Ok(mut writer) = control.writer.try_lock()
     {
-        let _ = send(&mut writer, b'X', &[1]);
+        let _ = send(&mut writer, b'X', stage.as_bytes());
     }
     std::process::exit(FAILURE_EXIT);
 }
@@ -179,19 +183,25 @@ fn dispatcher_loss_child() {
     let args = start_control(control).unwrap_or_else(|_| refuse());
     let _ = crate::registered_qualification::run_fault_fixture(startup, args.into_iter());
     // A qualified child must terminate through the unmodified fatal path.
-    refuse();
+    refuse_at("candidate_returned");
 }
 
 fn displace(control: &ChildControl, deadline: Instant) {
     let one_second = Duration::from_secs(1);
-    if control.cut.swap(1, Ordering::AcqRel) != 0
-        || deadline.saturating_duration_since(Instant::now()) < one_second
-    {
-        refuse();
+    if control.cut.swap(1, Ordering::AcqRel) != 0 {
+        refuse_at("repeated_cut");
     }
-    let image = Image::capture(&control.root).unwrap_or_else(|_| refuse());
     if deadline.saturating_duration_since(Instant::now()) < one_second {
-        refuse();
+        refuse_at("deadline_before_image");
+    }
+    let image = Image::capture(&control.root).unwrap_or_else(|error| {
+        if error.kind() == io::ErrorKind::TimedOut {
+            refuse_at("image_deadline");
+        }
+        refuse_at("image_unavailable");
+    });
+    if deadline.saturating_duration_since(Instant::now()) < one_second {
+        refuse_at("deadline_after_image");
     }
     // SAFETY: this exact test child owns live registration, the static
     // initialized unix descriptor lasts for the process, and no restore runs.
@@ -204,7 +214,7 @@ fn displace(control: &ChildControl, deadline: Instant) {
             || sql::sqlite3_vfs_register(stock, 1) != sql::SQLITE_OK
             || sql::sqlite3_vfs_find(std::ptr::null()) != stock
         {
-            refuse();
+            refuse_at("dispatcher_replacement");
         }
     }
     let mut frame = Vec::with_capacity(1 + image.bytes().len());
@@ -221,7 +231,7 @@ pub(crate) fn own_admission(admission: &Admission) {
     if let Some(control) = CONTROL.get()
         && (!admission.admit() || control.admission.set(admission.clone()).is_err())
     {
-        refuse();
+        refuse_at("own_admission");
     }
 }
 
@@ -230,7 +240,7 @@ pub(crate) fn before_commit(admission: &Admission, deadline: Instant) {
         && control.scenario == Scenario::Ready
     {
         if !admission.admit() {
-            refuse();
+            refuse_at("before_commit_admission");
         }
         displace(control, deadline);
     }
@@ -241,7 +251,7 @@ pub(crate) fn readiness_failure(failure: Failure) {
         && control.scenario == Scenario::Ready
     {
         if failure != Failure::Fatal || control.cut.load(Ordering::Acquire) != 1 {
-            refuse();
+            refuse_at("readiness_failure");
         }
         control.ready_failure.store(1, Ordering::Release);
     }
@@ -268,10 +278,10 @@ pub(crate) async fn before_status_write(
     match control.active_status.fetch_add(1, Ordering::AcqRel) {
         0 => return,
         1 => {}
-        _ => refuse(),
+        _ => refuse_at("repeated_status"),
     }
     if fatal.is_tripped() || !control.admission.get().is_some_and(Admission::admit) {
-        refuse();
+        refuse_at("before_status_admission");
     }
     displace(control, deadline);
     let observed_by = deadline - Duration::from_millis(250);
