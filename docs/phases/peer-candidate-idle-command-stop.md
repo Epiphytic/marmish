@@ -23,9 +23,12 @@ error and an already tripped admission go directly to the existing stop.
 
 Use one **six-second total prelude deadline**, measured from starting
 listener drain, across Begin, polls, time spent queued for the blocking pool
-and observing their results. The coordinator waits at most ten milliseconds
-between healthy Draining polls (no spinning and no catch-up). A first poll
-may run immediately after Begin. This is a prelude admission/acceptance
+and observing their results. Pass the same monotonic instant to the blocking
+turn and convert it with `tokio::time::Instant::from_std` for the async wait.
+The coordinator waits ten milliseconds between completed healthy Draining
+polls unless fatal or the deadline arrives earlier. It does not spin or catch
+up after a delayed wake. A first poll may run immediately after Begin.
+This is a prelude admission/acceptance
 budget, separate from the existing one-second physical observation slices.
 The existing 15 s incomplete diagnostic still measures from shutdown entry,
 including the prelude. The engine's five-second native acquisition budget,
@@ -61,8 +64,18 @@ turn, or cleanup proof to get past a missing join.
 - Invoke `command_begin_cleanup` once on the admitted idle owner. Its
   `begin_cleanup` checks durable active, uncertain, worker and observation
   counts, Ready state, and in-memory completion, ACK and queues before it
-  allocates a durable sequence fence. Busy or refusal enters physical stop;
-  do not retry Begin, run a normal tick, or try to make a busy engine idle.
+  allocates a durable sequence fence. Recheck the deadline and registration
+  immediately before allocating the fence after those potentially blocking
+  reads. The candidate prelude also checks the
+  engine's existing `copy_gc_pending` flag before any fence allocation.
+  `progress_streams` can have queued `CopyGc` during active service, and
+  ordinary `observation_pending` does not count it. The flag covers queued,
+  executing and completed-but-unapplied reclamation. Inspect it without a
+  worker poll or `take_copy_gc`. No normal progress runs after intake
+  closes, so the owner cannot enqueue another reclamation during the
+  prelude. Busy or refusal enters physical stop without admitting a new
+  reclamation. That disposition adds no promise about whether a previously
+  admitted worker control already ran or finishes before worker stop.
 - Invoke only `command_poll_cleanup` with that same retained owner until a
   poll returns same-fence `Quiesced`, time expires, or it refuses. The fence
   is kept by the coordinator; `Draining` is pending, `Open`, `Failed`, missing
@@ -81,8 +94,9 @@ turn, or cleanup proof to get past a missing join.
   Reuse the established per-row transaction and authority checks. Do not
   add a synthetic observation, batch SQL update or queue-loss recovery to
   reduce that cost. A stalled bounded request or ACK queue falls back to the
-  existing physical disposition. Candidate prelude progress admits each
-  completion/ACK/next registration at its durable effect boundary. If a
+  existing physical disposition. Candidate prelude progress checks each
+  completion commit, ACK, next registration, FinalObserve enqueue and
+  consuming Cleanup enqueue at its effect boundary. If a
   synchronous subeffect has already started, post-check it and stop the
   current poll on loss or expiry. Stock poll keeps its current behavior.
 - Internal ACKs differ from a Marmot ACK. The prelude reaches no relay
@@ -136,7 +150,9 @@ prelude failure; use physical teardown. Sticky fatal always dominates.
   ACK, actual engine join, socket/listener/SDK closure, cleanup and exit zero.
   Reopen stock on the same disposable profile and verify retained results
   and no second launch. Retain no command output, SQL or key data in reports.
-- Prove active/uncertain refusal before allocating a fence. Use an owned
+- Prove active, uncertain and pending Copy GC refusal before allocating a
+  fence. The Copy GC cases include queued and already completed but
+  unapplied work. Use an owned
   test gate to hold a bounded retained-row backlog or completion past the
   deadline. Cover registration committed before completion, completion
   committed before runtime ACK, late `Quiesced`, and mismatched/missing fence.
