@@ -95,8 +95,10 @@ The [registered dispatcher cut](validation/peer-candidate-fatal-issuer.md)
 qualifies one sticky observation shared by the one-use private WSS route
 and the sealed Command fence. Linux AMD64 tests displaced the actual
 SQLite default while a private WSS request was waiting and observed
-physical disconnect without a protocol Close. The candidate actor and
-daemon physical shutdown remain unmounted at this revision.
+physical disconnect without a protocol Close. The [daemon fault fixture](validation/peer-candidate-dispatcher-loss-subprocess.md)
+exercises both installed-layout ordinary shutdown cuts, before startup
+Commit and during a live Status read, with exact file comparison and cold
+reopen. A fault with an already active Peer actor still needs a combined run.
 The [metered KeyPackage prerequisite](validation/peer-candidate-managed-package.md)
 qualifies original native generation and independent cold attestation from
 the exact registered quota and checked route. Fresh SQLCipher setup is
@@ -110,7 +112,8 @@ handling remains a separate integration. The
 [storage and listener composition](validation/peer-candidate-owner-leaves-composition.md)
 qualifies the managed queued-package reader, borrowed Pending over private
 WSS, account custody across dispatcher cuts, and the same-user read
-listener on Linux AMD64. These components have no mounted daemon actor.
+listener on Linux AMD64. The mounted passive actor has no invitation
+service or positive Pending read path.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
@@ -139,9 +142,13 @@ The [healthy registered daemon proof](validation/peer-candidate-registered-daemo
 exercises a private Linux AMD64 Client startup through its Unix readiness
 handshake, a finite binary-safe remote Command over Marmot, and graceful
 shutdown with an independent stock SQLCipher reopen. The private
-qualification example runs against a verified installed layout. Started
-local Command engines, registered dispatcher loss and the installed Peer
-actor need their own live proofs. The [idle engine shutdown validation](validation/peer-candidate-idle-command-stop.md)
+qualification example runs against a verified installed layout. The
+[passive recipient proof](validation/peer-candidate-recipient-lifecycle.md)
+adds a private Linux AMD64 authenticated subscription after readiness.
+Ordinary commands work with that connection active and after a physical
+Peer disconnect. The private gate uses the qualification example. Public
+activation, managed invitation service and heartbeats still need live proofs.
+The [idle engine shutdown validation](validation/peer-candidate-idle-command-stop.md)
 covers the integrated shutdown path with an in-process real Command engine
 and the stock core regression selectors on Linux AMD64. A proved idle
 prelude hands the original owner and lease to physical stop, which gets a
