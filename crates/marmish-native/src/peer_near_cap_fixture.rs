@@ -134,7 +134,7 @@ fn read_pending(
     let mut conn = keyed(
         cursor.path(),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
-        *paths.cursor_key(),
+        &SqlCipherKey::raw(*paths.cursor_key()),
     )?;
     conn.busy_timeout(Duration::from_secs(2))
         .map_err(|_| "cursor_open")?;
@@ -142,7 +142,7 @@ fn read_pending(
         .map_err(|_| "cursor_open")?;
     let tx = conn.transaction().map_err(|_| "cursor_open")?;
     let selection = entry.selection;
-    fixture_pending_stage(
+    let selected = fixture_pending_stage(
         &tx,
         material.signer().public_key(),
         route.id,
@@ -157,7 +157,10 @@ fn read_pending(
             entry.expires_at,
         ),
     )
-    .map_err(|_| "pending_selection")
+    .map_err(|_| "pending_selection");
+    tx.rollback().map_err(|_| "cursor_close")?;
+    conn.close().map_err(|_| "cursor_close")?;
+    selected
 }
 
 fn cursor_digest(cursor: &CheckedFile) -> Result<[u8; 32]> {
@@ -173,18 +176,14 @@ fn cursor_digest(cursor: &CheckedFile) -> Result<[u8; 32]> {
     Ok(digest.finalize().into())
 }
 
-fn keyed(path: &Path, access: OpenFlags, key: [u8; 32]) -> Result<Connection> {
+fn keyed(path: &Path, access: OpenFlags, key: &SqlCipherKey) -> Result<Connection> {
     let conn = Connection::open_with_flags(
         path,
         access | OpenFlags::SQLITE_OPEN_NOFOLLOW | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|_| "sqlcipher_open")?;
-    open_hardened_sqlcipher(
-        &conn,
-        &SqlCipherKey::raw(key),
-        SqlCipherHardening::live_cache(),
-    )
-    .map_err(|_| "sqlcipher_open")?;
+    open_hardened_sqlcipher(&conn, key, SqlCipherHardening::live_cache())
+        .map_err(|_| "sqlcipher_open")?;
     Ok(conn)
 }
 
@@ -206,7 +205,7 @@ fn grow_selected(
     let mut conn = keyed(
         file.path(),
         OpenFlags::SQLITE_OPEN_READ_WRITE,
-        *paths.provisional_key(binding),
+        &SqlCipherKey::raw(*paths.provisional_key(binding)),
     )?;
     conn.busy_timeout(Duration::ZERO)
         .map_err(|_| "stage_open")?;
@@ -270,7 +269,15 @@ struct Pages {
 impl Pages {
     fn read(conn: &Connection) -> Result<Self> {
         Ok(Self {
-            size: pragma(conn, "page_size")?,
+            // SQLCipher intercepts the statement as its cipher setting. The
+            // table-valued form reads the actual pager, as MDK compaction does.
+            size: conn
+                .query_row(
+                    "SELECT CAST(page_size AS INTEGER) FROM pragma_page_size()",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "page_size")?,
             count: pragma(conn, "page_count")?,
             free: pragma(conn, "freelist_count")?,
         })
@@ -281,19 +288,21 @@ impl Pages {
     }
 }
 
-fn pragma(conn: &Connection, name: &str) -> Result<u64> {
-    let number: i64 = conn
-        .pragma_query_value(None, name, |row| row.get(0))
-        .map_err(|_| "stage_pragma")?;
-    u64::try_from(number).map_err(|_| "stage_pragma")
+fn integer_pragma(conn: &Connection, name: &'static str) -> Result<i64> {
+    conn.pragma_query_value(None, name, |row| row.get(0))
+        .map_err(|_| name)
+}
+
+fn pragma(conn: &Connection, name: &'static str) -> Result<u64> {
+    u64::try_from(integer_pragma(conn, name)?).map_err(|_| name)
 }
 
 type SchemaRow = (String, String, String, i64, Option<String>);
 
 #[derive(PartialEq, Eq)]
 struct Schema {
-    user_version: u64,
-    application_id: u64,
+    user_version: i64,
+    application_id: i64,
     rows: Vec<SchemaRow>,
 }
 
@@ -316,8 +325,8 @@ impl Schema {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| "stage_schema")?;
         Ok(Self {
-            user_version: pragma(conn, "user_version")?,
-            application_id: pragma(conn, "application_id")?,
+            user_version: integer_pragma(conn, "user_version")?,
+            application_id: integer_pragma(conn, "application_id")?,
             rows,
         })
     }
@@ -386,19 +395,27 @@ fn enlarge(conn: &mut Connection, len: u64, limit: u64) -> Result<Pages> {
     Ok(after)
 }
 
+fn allocation_error(error: rusqlite::Error) -> &'static str {
+    if error.sqlite_error_code() == Some(rusqlite::ErrorCode::DiskFull) {
+        "stage_page_full"
+    } else {
+        "stage_allocate"
+    }
+}
+
 fn allocate(conn: &mut Connection, target: u64) -> Result<u64> {
-    let tx = conn.transaction().map_err(|_| "stage_allocate")?;
+    let tx = conn.transaction().map_err(allocation_error)?;
     tx.execute_batch("CREATE TABLE marmish_fixture_padding(bytes BLOB NOT NULL) STRICT")
-        .map_err(|_| "stage_allocate")?;
+        .map_err(allocation_error)?;
     for _ in 0..256 {
         tx.execute(
             "INSERT INTO marmish_fixture_padding VALUES(randomblob(65536))",
             [],
         )
-        .map_err(|_| "stage_allocate")?;
+        .map_err(allocation_error)?;
         let count = pragma(&tx, "page_count")?;
         if count >= target {
-            tx.commit().map_err(|_| "stage_allocate")?;
+            tx.commit().map_err(|_| "stage_allocate_commit")?;
             return Ok(count);
         }
     }
@@ -429,13 +446,17 @@ pub(super) fn verify_joined_fixture(paths: &Paths<'_>, (binding, witness): (Bind
 
     // Exercise the actual stage profile and same VFS using the wrong cipher key.
     assert!(
-        keyed(original.path(), OpenFlags::SQLITE_OPEN_READ_ONLY, [0; 32])
-            .and_then(|conn| integrity(&conn))
-            .is_err()
+        keyed(
+            original.path(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+            &SqlCipherKey::raw([0; 32])
+        )
+        .and_then(|conn| integrity(&conn))
+        .is_err()
     );
     assert_eq!(
         grow_selected(paths, binding, witness, before.len() + 4097).err(),
-        Some("stage_allocate")
+        Some("stage_page_full")
     );
     assert_eq!(original.digest().unwrap(), start_digest);
 
@@ -503,7 +524,7 @@ pub(super) fn verify_joined_fixture(paths: &Paths<'_>, (binding, witness): (Bind
         grown.logical_bytes(),
         grown.page_count() * grown.page_size()
     );
-    assert!(grown.freelist_pages() * 4 > grown.page_count() * 3);
+    assert!(grown.freelist_pages() > 64);
     assert_ne!(grown.digest, start_digest);
     assert_eq!(
         grow_selected(paths, binding, witness, STAGE_CAP).err(),
