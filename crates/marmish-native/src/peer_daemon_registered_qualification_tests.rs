@@ -11,6 +11,7 @@ use std::{
 };
 
 const EXAMPLE: &str = "MARMISH_TEST_REGISTERED_QUALIFICATION_EXAMPLE";
+const DAEMON: &str = "MARMISH_TEST_REGISTERED_QUALIFICATION_DAEMON";
 const STARTUP_MARKER: &str = "MARMISH_INTERNAL_STARTUP";
 const LIMIT: Duration = Duration::from_secs(420);
 
@@ -226,7 +227,15 @@ async fn fresh_registered_startup() {
     let example =
         PathBuf::from(std::env::var_os(EXAMPLE).expect("supply the built private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
-    let daemon = layout().canonicalize().unwrap();
+    let daemon =
+        PathBuf::from(std::env::var_os(DAEMON).expect("supply the installed candidate daemon"));
+    let install = daemon.parent().unwrap().parent().unwrap().parent().unwrap();
+    crate::native_install::read_receipt(install).expect("claimed installed candidate prefix");
+    assert_eq!(
+        layout().canonicalize().unwrap(),
+        daemon,
+        "run the controller from the installed version's deps directory"
+    );
     let root = private();
     let mut relay = Relay::start().await;
     let command = CommandPeer::new(root.path(), "command");
@@ -310,12 +319,17 @@ async fn fresh_registered_startup() {
     drop(fallback);
 
     let log = tempfile::tempfile_in(root.path()).unwrap();
-    let (mut refused, report) = private_parent(example.clone(), args.clone(), log).await;
+    let (mut refused, report) =
+        private_parent(example.clone(), args.clone(), log.try_clone().unwrap()).await;
     assert!(
         report.is_err(),
         "stock fallback must never commit a registered report"
     );
     assert!(!refused.finished().await.success());
+    assert_eq!(
+        diagnostic(log),
+        "marmish qualification: invalid input: candidate_startup_not_registered\n"
+    );
     assert!(!socket.exists());
     assert!(ProfileLease::acquire_ready(root.path(), PROFILE).is_ok());
 
