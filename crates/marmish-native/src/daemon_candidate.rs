@@ -13,6 +13,8 @@ use crate::{
     identity::{IdentityMaterial, ProfileLease},
     ipc::{self, Pending, Request, Response},
     mdk_adapter::MdkOwner,
+    peer_candidate_startup::{self, Startup},
+    peer_invitation::installed_recipient::{Actor, Completion, Exit, PhysicalEnd},
     peer_relay_trust::candidate_registration::{
         ReceiverPreflight, RegisteredReceiver, RegistrationFailure,
     },
@@ -50,9 +52,17 @@ struct RegisteredStartup {
     retention: Duration,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QualificationIntent {
+    CommandOnly,
+    PassiveRecipient,
+}
+
 struct RegisteredOwner {
     lease: Arc<ProfileLease>,
-    receiver: RegisteredReceiver,
+    receiver: Option<RegisteredReceiver>,
+    recipient_material: Option<IdentityMaterial>,
+    recipient: Recipient,
     fatal: Fatal,
     admission: Option<Admission>,
     owner: Option<Box<MdkOwner>>,
@@ -135,17 +145,21 @@ fn select(
 
 impl RegisteredStartup {
     /// Returned resources are put in custody before the next admission.
-    fn open(self, executable: &Path) -> (RegisteredOwner, Result<()>) {
+    fn open(self, executable: &Path, intent: QualificationIntent) -> (RegisteredOwner, Result<()>) {
         let mut selected = RegisteredOwner {
             fatal: self.receiver.forwarding_verifier().fatal(),
             lease: self.lease,
-            receiver: self.receiver,
+            receiver: Some(self.receiver),
+            recipient_material: None,
+            recipient: Recipient::default(),
             owner: None,
             admission: None,
         };
         let opened = (|| {
             let fence = selected
                 .receiver
+                .as_mut()
+                .ok_or(Error::Identity("candidate_startup_custody"))?
                 .take_command_fence()
                 .map_err(|_| Error::Storage("candidate_dispatcher_lost"))?;
             let admission = Admission::from_registered(fence);
@@ -185,9 +199,78 @@ impl RegisteredStartup {
                 return Err(Error::Storage("candidate_dispatcher_lost"));
             }
             owner.command_set_lifetime(self.lifetime);
+            if intent == QualificationIntent::PassiveRecipient {
+                selected.recipient_material = Some(self.material);
+            }
             Ok(())
         })();
         (selected, opened)
+    }
+}
+
+#[derive(Default)]
+struct Recipient {
+    startup: Option<Startup>,
+    actor: Option<Actor>,
+    completion: Option<Completion>,
+}
+
+impl Recipient {
+    fn start(
+        &mut self,
+        lease: &Arc<ProfileLease>,
+        material: IdentityMaterial,
+        receiver: RegisteredReceiver,
+    ) -> Option<ipc::PassiveRegistration> {
+        let (startup, registration, worker) = peer_candidate_startup::pair();
+        match Actor::spawn(worker, lease.clone(), material, receiver) {
+            Ok(actor) => {
+                self.startup = Some(startup);
+                self.actor = Some(actor);
+                Some(ipc::PassiveRegistration {
+                    path: lease.socket_path(),
+                    registration,
+                })
+            }
+            Err(_) => {
+                crate::diagnostics::event("registered_recipient", "worker_spawn_failed");
+                None
+            }
+        }
+    }
+
+    fn stop(&self) {
+        if let Some(startup) = &self.startup {
+            startup.stop();
+        }
+        if let Some(actor) = &self.actor {
+            actor.stop();
+        }
+    }
+
+    async fn wait_until(&mut self, deadline: Instant) {
+        if let Some(actor) = self.actor.as_mut()
+            && self.completion.is_none()
+            && let Ok(completion) = actor.join_before(deadline).await
+        {
+            self.completion = Some(completion);
+            let category = match completion.exit {
+                Exit::Stopped => "stopped",
+                Exit::LocalUnavailable => "local_unavailable",
+                Exit::GlobalFault => "dispatcher_lost",
+                Exit::WorkerFailed => "worker_failed",
+            };
+            crate::diagnostics::event("registered_recipient", category);
+        }
+    }
+
+    fn pending(&self) -> bool {
+        self.actor.is_some() && self.completion.is_none()
+    }
+
+    fn unproved(&self) -> bool {
+        self.completion
+            .is_some_and(|completion| completion.physical == PhysicalEnd::Unproved)
     }
 }
 
@@ -203,6 +286,7 @@ impl Listener {
         &mut self,
         lease: &ProfileLease,
         fatal: &Fatal,
+        passive: Option<ipc::PassiveRegistration>,
     ) -> Result<(mpsc::Receiver<Pending>, watch::Sender<Response>)> {
         let listener = ipc::bind(&lease.socket_path())?;
         let (drain, drained) = oneshot::channel();
@@ -210,7 +294,10 @@ impl Listener {
         let (status, snapshots) = watch::channel(Response::success(
             serde_json::json!({"state": "activating"}),
         ));
-        let fatal = fatal.clone();
+        let registered = match passive {
+            Some(registration) => ipc::CandidateListener::passive(fatal.clone(), registration),
+            None => ipc::CandidateListener::registered(fatal.clone(), None),
+        };
         let task = tokio::spawn(async move {
             ipc::serve_with_listener(
                 listener,
@@ -222,7 +309,7 @@ impl Listener {
                 Some(drained),
                 #[cfg(test)]
                 None,
-                ipc::CandidateListener::registered(fatal, None),
+                registered,
             )
             .await
         });
@@ -347,7 +434,17 @@ impl RegisteredOwner {
         admit(admission)?;
         #[cfg(test)]
         registered_loss::own_admission(admission);
-        let (mut requests, status) = listener.start(&self.lease, &self.fatal)?;
+        let passive = match self.recipient_material.take() {
+            Some(material) => {
+                let receiver = self
+                    .receiver
+                    .take()
+                    .ok_or(Error::Identity("candidate_startup_custody"))?;
+                self.recipient.start(&self.lease, material, receiver)
+            }
+            None => None,
+        };
+        let (mut requests, status) = listener.start(&self.lease, &self.fatal, passive)?;
         let fatal = &self.fatal;
         let mut interrupt = |cx: &mut Context<'_>| {
             if shutdown.as_mut().poll(cx).is_ready() {
@@ -378,14 +475,12 @@ impl RegisteredOwner {
             serde_json::to_value(owner.status()?).map_err(|_| Error::Invalid("status_encoding"))?;
         snapshot["state"] = serde_json::json!("active");
         if let Some(channel) = channel.take() {
-            let _commit = channel
-                .exchange(admission, fatal, interrupt)
-                .await
-                .map_err(|failure| {
-                    #[cfg(test)]
-                    registered_loss::readiness_failure(failure);
-                    report_failure(failure, listener)
-                })?;
+            let result = channel.exchange(admission, fatal, &mut interrupt).await;
+            if let Err(failure) = result {
+                #[cfg(test)]
+                registered_loss::readiness_failure(failure);
+                return Err(report_failure(failure, listener));
+            }
         } else {
             let reason = poll_fn(|cx| std::task::Poll::Ready(interrupt(cx))).await;
             if let Some(reason) = reason {
@@ -395,6 +490,17 @@ impl RegisteredOwner {
         }
         admit(admission)?;
         status.send_replace(Response::success(snapshot));
+        if let Some(startup) = self.recipient.startup.as_ref() {
+            let reason = poll_fn(|cx| std::task::Poll::Ready(interrupt(cx))).await;
+            if let Some(reason) = reason {
+                return Err(interruption(reason, listener));
+            }
+            if lifetime.expired()? {
+                return Err(Error::Timeout);
+            }
+            admit(admission)?;
+            startup.ordinary_ready();
+        }
         let profile = self
             .lease
             .root()
@@ -520,6 +626,7 @@ pub(crate) async fn run(
     startup: Option<StartupReporter>,
     executable: &Path,
     fixture_roots: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+    intent: QualificationIntent,
 ) -> Result<()> {
     let mut channel = startup.as_ref().map(ChildChannel::take).transpose()?;
     let origin = ServiceLifetime::start(None)?;
@@ -560,7 +667,7 @@ pub(crate) async fn run(
     };
     match select(prepared, connector, eligible)? {
         Selection::Stock(prepared, connector) => {
-            if channel.is_some() {
+            if channel.is_some() || intent == QualificationIntent::PassiveRecipient {
                 return Err(Error::Invalid("candidate_startup_not_registered"));
             }
             let opened = super::open_stock(
@@ -588,7 +695,7 @@ pub(crate) async fn run(
             std::process::exit(1);
         }
         Selection::Registered(registered) => {
-            let (mut custody, result) = registered.open(executable);
+            let (mut custody, result) = registered.open(executable, intent);
             let mut listener = Listener::default();
             let result = match result {
                 Ok(()) => custody.serve(&mut listener, &mut channel).await,
@@ -619,6 +726,7 @@ async fn finish(
     use crate::mdk_adapter::healthy_stop::RegisteredStop;
 
     let began = Instant::now();
+    custody.recipient.stop();
     listener.start_drain();
     let Some(owner) = custody.owner.take() else {
         // A canceled or failed guarded open owns its partial resources. Its
@@ -639,8 +747,18 @@ async fn finish(
     let mut last_notice = None;
     loop {
         let deadline = Instant::now() + Duration::from_secs(1);
-        let (owner, ()) = tokio::join!(stop.observe(deadline), listener.wait_until(deadline));
-        if listener.task.is_none() && !owner.physical.requires_process_hold() {
+        let (owner, (), ()) = tokio::join!(
+            stop.observe(deadline),
+            listener.wait_until(deadline),
+            custody.recipient.wait_until(deadline),
+        );
+        if custody.recipient.unproved() {
+            retain_unproved((custody, listener, stop)).await;
+        }
+        if listener.task.is_none()
+            && !custody.recipient.pending()
+            && !owner.physical.requires_process_hold()
+        {
             let listener_clean = listener
                 .outcome
                 .as_ref()

@@ -19,7 +19,22 @@ fn private_arguments_require_explicit_canonical_relay_policy() {
         "wss://127.0.0.1:9443/",
         "off",
     ];
-    assert!(arguments(args(&base)).is_ok());
+    assert!(matches!(
+        arguments(args(&base)).unwrap().intent,
+        QualificationIntent::CommandOnly
+    ));
+    assert!(matches!(
+        arguments(args(&["--passive-recipient"]).chain(args(&base)))
+            .unwrap()
+            .intent,
+        QualificationIntent::PassiveRecipient
+    ));
+    assert!(arguments(args(&["--unknown"]).chain(args(&base))).is_err());
+    assert!(
+        arguments(args(&["--passive-recipient", "--passive-recipient"]).chain(args(&base)))
+            .is_err()
+    );
+    assert!(arguments(args(&base).chain(args(&["--passive-recipient"]))).is_err());
     assert!(arguments(args(&base[..4])).is_err());
     for (index, replacement) in [
         (0, "marmishd"),

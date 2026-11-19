@@ -1,6 +1,7 @@
 //! Private candidate example. The ordinary installed launchers cannot enter here.
 use crate::{
     Error, Result, daemon,
+    daemon::registered::QualificationIntent,
     daemon_launch::StartupReporter,
     identity::{BackendChoice, validate_name},
     native_install, native_layout, native_manifest,
@@ -10,7 +11,7 @@ use rustls::pki_types::CertificateDer;
 use std::{
     ffi::OsString,
     fs::OpenOptions,
-    io::Read,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     process::ExitCode,
@@ -26,13 +27,21 @@ struct Inputs {
     identity: String,
     policy: RelayPolicy,
     ca: Option<PathBuf>,
+    intent: QualificationIntent,
 }
 
-fn arguments(mut args: impl Iterator<Item = OsString>) -> Result<Inputs> {
+fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
     fn missing() -> Error {
         Error::Invalid("qualification_arguments")
     }
 
+    let mut args = args.peekable();
+    let intent = if args.peek().is_some_and(|arg| arg == "--passive-recipient") {
+        args.next();
+        QualificationIntent::PassiveRecipient
+    } else {
+        QualificationIntent::CommandOnly
+    };
     let daemon = PathBuf::from(args.next().ok_or_else(missing)?);
     let state_dir = PathBuf::from(args.next().ok_or_else(missing)?);
     let identity = args
@@ -75,6 +84,7 @@ fn arguments(mut args: impl Iterator<Item = OsString>) -> Result<Inputs> {
         identity,
         policy,
         ca,
+        intent,
     })
 }
 
@@ -141,11 +151,12 @@ fn installed(daemon: &Path) -> Result<native_layout::ExecutableLayout> {
 
 pub(super) fn entry() -> ExitCode {
     if let Err(error) = run() {
-        if matches!(error, Error::DaemonStartup(_)) {
-            eprintln!("marmish qualification: startup failed");
+        let mut log = std::io::stderr().lock();
+        let _ = if matches!(error, Error::DaemonStartup(_)) {
+            writeln!(log, "marmish qualification: startup failed")
         } else {
-            eprintln!("marmish qualification: {error}");
-        }
+            writeln!(log, "marmish qualification: {error}")
+        };
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -199,6 +210,7 @@ fn run_with_inputs(startup: Option<StartupReporter>, inputs: Inputs) -> Result<(
             startup,
             &inputs.daemon,
             roots,
+            inputs.intent,
         )))
 }
 

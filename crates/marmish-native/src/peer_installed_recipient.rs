@@ -40,6 +40,29 @@ pub(crate) enum Exit {
     WorkerFailed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PhysicalEnd {
+    NoStart,
+    Drained,
+    Unproved,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Completion {
+    pub(crate) exit: Exit,
+    pub(crate) physical: PhysicalEnd,
+}
+
+impl Completion {
+    fn new(exit: Exit, physical: PhysicalEnd) -> Self {
+        Self { exit, physical }
+    }
+
+    fn finalize(self, forwarding: &ForwardingVerifier) -> Self {
+        Self::new(final_exit(forwarding, self.exit), self.physical)
+    }
+}
+
 #[must_use]
 pub(crate) struct Actor {
     stop: CancellationToken,
@@ -47,8 +70,8 @@ pub(crate) struct Actor {
 }
 
 enum Worker {
-    Owned(JoinHandle<Exit>),
-    Joined(Exit),
+    Owned(JoinHandle<Completion>),
+    Joined(Completion),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,12 +91,15 @@ impl Actor {
             .spawn(move || {
                 let forwarding = registration.forwarding_verifier();
                 let Ok(runtime) = Builder::new_current_thread().enable_all().build() else {
-                    return final_exit(&forwarding, Exit::WorkerFailed);
+                    return Completion::new(Exit::WorkerFailed, PhysicalEnd::NoStart)
+                        .finalize(&forwarding);
                 };
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     runtime.block_on(run(worker, &lease, &material, registration, &worker_stop))
                 }));
-                final_exit(&forwarding, result.unwrap_or(Exit::WorkerFailed))
+                result
+                    .unwrap_or(Completion::new(Exit::WorkerFailed, PhysicalEnd::Unproved))
+                    .finalize(&forwarding)
             })?;
         Ok(Self {
             stop,
@@ -87,7 +113,10 @@ impl Actor {
 
     /// The owned handle survives an overdue or canceled join. A request to
     /// stop is insufficient to release the ordinary owner's lease.
-    pub(crate) async fn join_before(&mut self, deadline: Instant) -> Result<Exit, Incomplete> {
+    pub(crate) async fn join_before(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Completion, Incomplete> {
         loop {
             match &self.worker {
                 Worker::Joined(exit) => return Ok(*exit),
@@ -100,14 +129,14 @@ impl Actor {
             }
             sleep_until((now + JOIN_POLL).min(deadline)).await;
         }
-        let Worker::Owned(thread) =
-            std::mem::replace(&mut self.worker, Worker::Joined(Exit::WorkerFailed))
+        let unproved = Completion::new(Exit::WorkerFailed, PhysicalEnd::Unproved);
+        let Worker::Owned(thread) = std::mem::replace(&mut self.worker, Worker::Joined(unproved))
         else {
             unreachable!("only a finished owned thread reaches join");
         };
-        let exit = thread.join().unwrap_or(Exit::WorkerFailed);
-        self.worker = Worker::Joined(exit);
-        Ok(exit)
+        let completion = thread.join().unwrap_or(unproved);
+        self.worker = Worker::Joined(completion);
+        Ok(completion)
     }
 }
 
@@ -156,17 +185,17 @@ async fn run(
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
     stop: &CancellationToken,
-) -> Exit {
+) -> Completion {
     let forwarding = registration.forwarding_verifier();
     let fatal = forwarding.fatal();
     let ready = tokio::select! {
         biased;
-        () = fatal.tripped() => return Exit::GlobalFault,
-        () = stop.cancelled() => return final_exit(&forwarding, Exit::Stopped),
+        () = fatal.tripped() => return Completion::new(Exit::GlobalFault, PhysicalEnd::NoStart),
+        () = stop.cancelled() => return Completion::new(Exit::Stopped, PhysicalEnd::NoStart),
         ready = worker.ready() => ready,
     };
     let Some(ready) = ready else {
-        return final_exit(&forwarding, Exit::Stopped);
+        return Completion::new(Exit::Stopped, PhysicalEnd::NoStart);
     };
     let fence = StartupFence {
         ready,
@@ -174,8 +203,9 @@ async fn run(
         forwarding: &forwarding,
         fatal: &fatal,
     };
-    let result = attach(lease, material, registration, fence).await;
-    final_exit(&forwarding, result.unwrap_or_else(|exit| exit))
+    attach(lease, material, registration, fence)
+        .await
+        .unwrap_or_else(|exit| Completion::new(exit, PhysicalEnd::NoStart))
 }
 
 async fn attach(
@@ -183,7 +213,7 @@ async fn attach(
     material: &IdentityMaterial,
     registration: RegisteredReceiver,
     mut fence: StartupFence<'_>,
-) -> Result<Exit, Exit> {
+) -> Result<Completion, Exit> {
     let mut attached = fence.step(|| registration.attach(lease, material))?;
     let (quota, mut route) = attached.actor_parts();
     let mut owner = fence.step(|| {
@@ -208,11 +238,11 @@ async fn attach(
             )))
             .await;
             revoke_and_reap(fence.ready, &route, &drain).await;
-            result.unwrap_or(Exit::WorkerFailed)
+            Completion::new(result.unwrap_or(Exit::WorkerFailed), PhysicalEnd::Drained)
         }
         Err(_) => {
             route.revoke();
-            Exit::LocalUnavailable
+            Completion::new(Exit::LocalUnavailable, PhysicalEnd::NoStart)
         }
     };
     Ok(result)
@@ -312,6 +342,22 @@ mod tests {
     const CASE: &str = "MARMISH_TEST_ACTOR_START_CASE";
     const ROOT: &str = "MARMISH_TEST_ACTOR_START_ROOT";
     const RUNTIME_SOCKET: usize = 5;
+
+    #[tokio::test]
+    async fn uncaught_thread_panic_cannot_prove_physical_end() {
+        let mut actor = Actor {
+            stop: CancellationToken::new(),
+            worker: Worker::Owned(thread::spawn(|| panic!("intentional out-of-band panic"))),
+        };
+        let expected = Ok(Completion::new(Exit::WorkerFailed, PhysicalEnd::Unproved));
+        assert_eq!(
+            actor
+                .join_before(Instant::now() + Duration::from_secs(1))
+                .await,
+            expected
+        );
+        assert_eq!(actor.join_before(Instant::now()).await, expected);
+    }
 
     #[test]
     #[ignore = "uses fresh subprocesses, private WSS relay and SQLCipher"]
@@ -479,6 +525,11 @@ mod tests {
             }
             _ => panic!("unknown actor case"),
         };
+        let physical = match case.as_str() {
+            "before_ready" | "sidecar_only" | "malformed" => PhysicalEnd::NoStart,
+            _ => PhysicalEnd::Drained,
+        };
+        let expected = Completion::new(expected, physical);
         assert_eq!(
             actor
                 .join_before(Instant::now() + Duration::from_secs(5))

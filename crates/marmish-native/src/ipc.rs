@@ -400,7 +400,46 @@ impl SocketFence {
 #[derive(Default)]
 pub(crate) struct CandidateListener {
     fatal: Option<crate::dispatcher_fatal::Fatal>,
-    offer: Option<peer_read_listener::Offer>,
+    registration: CandidateRegistration,
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Default)]
+enum CandidateRegistration {
+    #[default]
+    None,
+    View(peer_read_listener::Offer),
+    Passive(PassiveRegistration),
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) struct PassiveRegistration {
+    pub(crate) path: std::path::PathBuf,
+    pub(crate) registration: crate::peer_candidate_startup::ListenerRegistration,
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl PassiveRegistration {
+    fn register(self, listener: &UnixListener) -> Option<Self> {
+        let bound = listener.local_addr().ok()?;
+        if bound.as_pathname() != Some(self.path.as_path()) {
+            return None;
+        }
+        self.registration.registered();
+        Some(self)
+    }
 }
 
 #[cfg(all(
@@ -416,7 +455,17 @@ impl CandidateListener {
     ) -> Self {
         Self {
             fatal: Some(fatal),
-            offer,
+            registration: offer.map_or(CandidateRegistration::None, CandidateRegistration::View),
+        }
+    }
+
+    pub(crate) fn passive(
+        fatal: crate::dispatcher_fatal::Fatal,
+        registration: PassiveRegistration,
+    ) -> Self {
+        Self {
+            fatal: Some(fatal),
+            registration: CandidateRegistration::Passive(registration),
         }
     }
 }
@@ -708,7 +757,11 @@ pub(crate) async fn serve_with_listener(
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    let read_offer = registered.offer.and_then(|offer| offer.register(&listener));
+    let (read_offer, passive) = match registered.registration {
+        CandidateRegistration::None => (None, None),
+        CandidateRegistration::View(offer) => (offer.register(&listener), None),
+        CandidateRegistration::Passive(passive) => (None, passive.register(&listener)),
+    };
     let receive_drain = async {
         #[cfg(any(
             test,
@@ -863,7 +916,7 @@ pub(crate) async fn serve_with_listener(
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    drop(read_offer);
+    drop((read_offer, passive));
     drop(listener);
     tasks.shutdown().await;
     outcome

@@ -59,7 +59,7 @@ impl Fixture {
             None,
             ipc::CandidateListener {
                 fatal: None,
-                offer: Some(offer),
+                registration: ipc::CandidateRegistration::View(offer),
             },
         ));
         Self {
@@ -320,4 +320,36 @@ async fn readiness_and_view_stops_refuse_a_read_admitted_on_a_live_listener() {
         fixture.assert_owner_untouched().await;
         fixture.drain().await;
     }
+}
+
+#[tokio::test]
+async fn passive_registration_checks_kernel_path_and_stops_on_drop() {
+    use crate::ipc::PassiveRegistration;
+
+    let directory = tempfile::tempdir().unwrap();
+    let actual = directory.path().join("daemon.sock");
+    let listener = bind(&actual).unwrap();
+    let (startup, registration, worker) = peer_candidate_startup::pair();
+    startup.ordinary_ready();
+    let wrong = PassiveRegistration {
+        path: directory.path().join("other.sock"),
+        registration,
+    };
+    assert!(wrong.register(&listener).is_none());
+    assert!(worker.ready().await.is_none());
+
+    let (startup, registration, worker) = peer_candidate_startup::pair();
+    let current = registration.readiness();
+    let matching = PassiveRegistration {
+        path: actual,
+        registration,
+    }
+    .register(&listener)
+    .unwrap();
+    assert!(!current.is_current());
+    startup.ordinary_ready();
+    let ready = worker.ready().await.unwrap();
+    assert!(ready.is_current());
+    drop(matching);
+    assert!(!current.is_current());
 }
