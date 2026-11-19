@@ -173,7 +173,7 @@ async fn private_parent(
     example: PathBuf,
     args: Vec<OsString>,
     log: File,
-) -> (OwnedChild, Result<()>) {
+) -> (OwnedChild, crate::Result<()>) {
     // The test's single-thread reactor must keep serving private WSS during R/A/C.
     tokio::task::spawn_blocking(move || {
         let launch = candidate_parent::launch(&example, &args, log).unwrap();

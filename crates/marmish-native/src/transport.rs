@@ -792,9 +792,13 @@ impl RelayConnector {
         }
         let (index, route) = self.policy().destination(url)?;
         #[cfg(any(
-        test,
-        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
-    ))]
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if let Some(roots) = &self.0.fixture_roots
             && !roots.iter().any(|(fixture_url, _)| fixture_url == url)
         {
@@ -990,15 +994,19 @@ impl RelayConnector {
             return self.websocket(url, stream, permit).await;
         }
         #[cfg(any(
-        test,
-        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
-    ))]
+            test,
+            all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            )
+        ))]
         if let Some(roots) = &self.0.fixture_roots {
             let (_, roots) = roots
                 .iter()
                 .find(|(fixture, _)| fixture == url)
                 .ok_or(Error::Transport("fixture_relay_destination"))?;
-            let stream = tls_stream_with_roots(stream, host, roots.clone()).await?;
+            let stream = tls_stream_using_roots(stream, host, roots.clone()).await?;
             return self.websocket(url, stream, permit).await;
         }
         let stream = if parsed.scheme() == "wss" {
