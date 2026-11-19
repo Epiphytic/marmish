@@ -4,6 +4,8 @@ use crate::{daemon_launch::candidate_parent, mdk_adapter::MdkOwner};
 use std::{
     ffi::{OsString, c_int},
     fs::File,
+    io::{Read, Seek},
+    net::{Ipv4Addr, TcpListener},
     os::{fd::AsRawFd, unix::process::CommandExt},
     process::{Child, Command, Stdio},
 };
@@ -117,6 +119,13 @@ fn inherit_unrelated_three(process: &mut Command, null: &File) {
     }
 }
 
+fn diagnostic(mut file: File) -> String {
+    file.rewind().unwrap();
+    let mut text = String::new();
+    file.take(257).read_to_string(&mut text).unwrap();
+    text
+}
+
 async fn wrong_marker_and_descriptor(
     example: &Path,
     args: &[OsString],
@@ -130,18 +139,33 @@ async fn wrong_marker_and_descriptor(
         inherit_unrelated_three(&mut process, &null);
         let mut child = OwnedChild(process.env(STARTUP_MARKER, marker).spawn().unwrap());
         assert!(!child.finished().await.success());
-        use std::io::{Read, Seek};
-        let mut reader = output;
-        reader.rewind().unwrap();
-        let mut text = String::new();
-        reader.take(256).read_to_string(&mut text).unwrap();
         assert_eq!(
-            text,
+            diagnostic(output),
             "marmish qualification: invalid input: daemon_startup_context\n"
         );
         assert!(!socket.exists());
         assert!(ProfileLease::acquire_ready(root, PROFILE).is_ok());
     }
+}
+
+async fn wrong_fixture_route(example: &Path, args: &[OsString], root: &Path, socket: &Path) {
+    let alternate = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    alternate.set_nonblocking(true).unwrap();
+    let mut args = args.to_vec();
+    args[3] = format!("wss://{}/", alternate.local_addr().unwrap()).into();
+    let output = tempfile::tempfile_in(root).unwrap();
+    let mut exec = fresh_process(example, &args, output.try_clone().unwrap());
+    let mut child = OwnedChild(exec.spawn().unwrap());
+    assert!(!child.finished().await.success());
+    assert_eq!(
+        diagnostic(output),
+        "marmish qualification: invalid input: fixture_relay_trust\n"
+    );
+    assert!(
+        matches!(alternate.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+    assert!(!socket.exists());
+    assert!(ProfileLease::acquire_ready(root, PROFILE).is_ok());
 }
 
 async fn private_parent(
@@ -229,6 +253,7 @@ async fn fresh_registered_startup() {
 
     let socket = socket_path_for(root.path(), PROFILE).unwrap();
     wrong_marker_and_descriptor(&example, &args, root.path(), &socket).await;
+    wrong_fixture_route(&example, &args, root.path(), &socket).await;
     let begin = Instant::now();
     let log = tempfile::tempfile_in(root.path()).unwrap();
     let (mut child, report) = private_parent(example.clone(), args.clone(), log).await;
