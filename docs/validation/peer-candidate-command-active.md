@@ -74,3 +74,19 @@ retention of Welcome and generic, Stream and Command publications across
 restart. The [follow-up design](../phases/peer-candidate-command-active-cuts.md)
 records the remaining room, maintenance, republish and drain boundaries.
 No daemon routing or release path changes in this increment.
+
+## Composed Linux AMD64 validation
+
+Exact source `b4831f8f59bd5ab6ba65cb8af9706921d5dc817e` passed all-target
+strict Clippy in 30.22 s for stock and 31.36 s for candidate. Native libtest
+link took 44.31 s for stock and 45.13 s for candidate. Author candidate
+runs measured 7.09 s for the first real displacement selector and 28.41 s
+for the six-case effect selector. Five stock Command startup checks
+passed in 44.20 s, and 21 stock process launch checks passed in 0.69 s.
+Claude independently repeated the two candidate selectors in 5.92 s and
+24.92 s, the stock observer test, and four retained Consent tests in
+98.56 s. The archive SHA-256 values are
+`fe93581acc4ba305dc328735b9d6b9566337c26d76d53437fc6989d553311a09`
+for stock and `332d4d4d587b672dee15fc15119ae0b7ed34ff550c244e3312b3cf43cda75a25`
+for candidate. These are test durations. Installed service latency has
+separate acceptance evidence.
