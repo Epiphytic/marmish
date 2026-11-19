@@ -54,14 +54,14 @@ NO_MUTEX, zero busy timeout, and the derived `Paths::provisional_key` via
 locked MDK `open_hardened_sqlcipher` with `live_cache()`. Verify existing
 DELETE mode, `secure_delete=ON`, `auto_vacuum=INCREMENTAL`, FULL synchronous
 and SQLCipher enabled. Disable cache spilling for these two private
-transactions. Require at least 48 MiB available in the checked private
+transactions. Require at least 64 MiB available in the checked private
 volume before touching the image. No file truncation, raw page writes or
 VACUUM are used by the grow helper.
 
 Read and retain the exact permanent `sqlite_schema` rows, including
 rootpage, and `user_version` and `application_id`. Read `page_size`,
 `page_count`, and `freelist_count`. Use the locked SQLCipher implementation's
-`PRAGMA cipher_integrity_check` requiring zero reported errors and
+`PRAGMA cipher_integrity_check` requiring a recognized result column and zero error rows and
 `PRAGMA quick_check` requiring exactly one `ok` row before and after. The
 bundled source implements `cipher_integrity_check` explicitly. Do not open
 the original through the mutating MDK account initializer after growing it.
@@ -70,7 +70,9 @@ SQLCipher error text, SQL results or path is published.
 
 Set `max_page_count = floor((16 MiB - 1)/page_size)` and verify the effective
 value. Aim to reach 15.5 MiB in actual page count with at most 256 inserts
-of 65,536 random bytes per insert. Create one fixed-name permanent table
+of 65,536 random bytes per insert, checking the target after each insert.
+Allow at most one insert of overshoot within the hard cap. About 16 MiB of
+dirty pages may be held in memory with cache spill disabled. Create one fixed-name permanent table
 with one BLOB column and no index, AUTOINCREMENT or trigger, then insert
 SQLite `randomblob` rows within one transaction. Commit allocation before
 starting a second transaction that drops the exact table. The two durable
@@ -125,3 +127,7 @@ cursor verification are checked in context. Record filesystem type if
 available and report any failure to meet the reviewed measurements. The
 helper cannot stand in for installed native validation, performance results,
 or public availability.
+
+Claude Code Auto approved design `650556c` in session
+`675cf22b-e02d-43cc-a971-92aacbf9423b`. Its nonblocking findings refined
+the integrity check, headroom, and per-row stop condition above.
