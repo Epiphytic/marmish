@@ -44,3 +44,19 @@ unproved cleanup. The direct cut includes a real caught panic before spawn and
 a separate real reaped-child control. The full runner suite also exercises
 stale cleanup without an exit observation. This increment leaves the
 controlled live-child/process-hold proof to the reviewed daemon composition.
+
+## Composed worker and child observations
+
+Claude Code Sonnet in Auto mode approved exact composed source
+`f1c5a00c669162f12702ab2a98c676be4aa033e5` in session
+`680ae6c6-438b-469b-b79e-109e23fe3d3b`. The preceding review,
+`a3a750e3-abc7-41cc-bb92-d7a72d35cbde`, found legacy fixtures that
+treated an absent worker handle as a successful join. The final tests use
+a real joined worker for success and require failure without join evidence.
+
+Claude checked the embedded source stamp of both binaries and reran 11
+fatal-engine tests, six physical tests and 26 stream runner tests per
+build, with one opt-in runner test skipped. The independent run excluded
+private WSS. The review confirmed that unresolved engine or runner
+disposition retains custody. A known failed spawn can finish the stop
+with failure when the remaining physical barriers have settled.

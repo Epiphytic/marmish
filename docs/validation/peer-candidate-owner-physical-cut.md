@@ -65,3 +65,19 @@ The injected panic creates no OS child. The regression proves that uncertain
 runner evidence blocks custody transfer at this leaf. Keeping the actual daemon
 process alive after a real SQLite dispatcher displacement still requires the
 daemon composition qualification.
+
+## Exact composed source
+
+On Linux AMD64, stock and candidate artifacts for
+`f1c5a00c669162f12702ab2a98c676be4aa033e5` passed strict all-target Clippy
+in 31.24 and 32.74 seconds respectively. Each passed 33 engine tests, six
+physical tests and six lifecycle tests. One engine and one physical test
+per build were skipped as opt-in. The physical suite included a real
+private WSS owner, reaped child, closed transport and unchanged stored
+state after the last admitted effect.
+
+The engine explicitly records successful worker joins. Returned failure
+or missing join evidence keeps the lease held. A focused fixture
+separately proves that a reported failure before any child is started
+permits a failed disposition once all other barriers have completed.
+The registered daemon still needs an installed end-to-end stop test.
