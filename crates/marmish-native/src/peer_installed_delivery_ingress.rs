@@ -213,6 +213,7 @@ impl Checkpoint {
         )?)
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn installed_delivery_scan(
         &mut self,
         source: &Source,
@@ -239,6 +240,7 @@ impl Checkpoint {
         })?)
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn commit_installed_delivery_page(
         &mut self,
         source: &Source,
@@ -287,6 +289,7 @@ impl Checkpoint {
         )?)
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn observe_installed_delivery(
         &mut self,
         source: &Source,

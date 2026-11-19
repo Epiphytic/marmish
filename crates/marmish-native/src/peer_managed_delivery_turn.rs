@@ -207,6 +207,7 @@ impl<'lease> RecoveredOwner<'lease> {
         }
     }
 
+    #[cfg(test)]
     pub(in crate::peer_invitation) fn measure_delivery(
         &mut self,
         quota: &ReceiverQuota<'_>,

@@ -51,7 +51,7 @@ pub(super) async fn exercise(fixture: Fixture<'_, '_>) {
                 founder,
                 account,
                 [index; 16],
-                &NostrRoutingV1::new([index; 32], vec![relay.url.clone()]).unwrap(),
+                &NostrRoutingV1::new([index; 32], vec![relay.url.to_string()]).unwrap(),
                 stamp,
             )
             .unwrap()
