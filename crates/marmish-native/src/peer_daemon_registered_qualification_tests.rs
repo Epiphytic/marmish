@@ -257,10 +257,10 @@ async fn fresh_registered_startup() {
     )
     .unwrap();
     lease.mark_ready(seed.opened_binding()).unwrap();
+    let socket = lease.socket_path();
     daemon::stop_silent(lease, seed).await.unwrap();
     drop(identity);
 
-    let socket = socket_path_for(root.path(), PROFILE).unwrap();
     wrong_marker_and_descriptor(&example, &args, root.path(), &socket).await;
     wrong_fixture_route(&example, &args, root.path(), &socket).await;
     let begin = Instant::now();

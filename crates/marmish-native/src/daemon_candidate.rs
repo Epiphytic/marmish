@@ -399,13 +399,28 @@ impl RegisteredOwner {
             if owner.command_count_exit_ready()? {
                 return Ok(());
             }
-            tokio::select! {
+            enum Next {
+                Request(Option<Pending>),
+                Tick,
+            }
+            let work = async {
+                tokio::select! {
+                    pending = requests.recv() => Next::Request(pending),
+                    _ = interval.tick() => Next::Tick,
+                }
+            };
+            // Stops are prioritized independently of the fair selection
+            // between local requests and transport progress.
+            let next = tokio::select! {
                 biased;
                 _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
                 _ = shutdown.as_mut() => return Ok(()),
                 _ = expired.as_mut() => return Ok(()),
                 _ = listener.exited() => return Err(listener.exit_error()),
-                pending = requests.recv() => {
+                work = work => work,
+            };
+            match next {
+                Next::Request(pending) => {
                     let pending = pending.ok_or(Error::Invalid("ipc_listener_stopped"))?;
                     admit(admission)?;
                     if pending.deadline <= Instant::now() || pending.respond.is_closed() {
@@ -425,7 +440,7 @@ impl RegisteredOwner {
                     }
                     let _ = pending.respond.send(reply.unwrap_or_else(super::failure));
                 }
-                _ = interval.tick() => {
+                Next::Tick => {
                     let turn = tick(owner, &mut rooms);
                     let degraded = tokio::select! {
                         biased;
@@ -438,7 +453,11 @@ impl RegisteredOwner {
                     admit(admission)?;
                     let mut snapshot = serde_json::to_value(owner.status()?)
                         .map_err(|_| Error::Invalid("status_encoding"))?;
-                    snapshot["state"] = serde_json::json!(if degraded { "transport_degraded" } else { "active" });
+                    snapshot["state"] = serde_json::json!(if degraded {
+                        "transport_degraded"
+                    } else {
+                        "active"
+                    });
                     admit(admission)?;
                     status.send_replace(Response::success(snapshot));
                 }
