@@ -101,3 +101,6 @@ path. Check exact redacted List/Show while fresh and unavailability on
 refusal. Candidate strict compilation must exclude all raw publication
 and empty-observation fixtures. Healthy Empty continues to depend on a
 completed, current authenticated inventory scan.
+
+Claude Code Auto (Opus) approved exact `9c7d7b7` in session
+`4b8c28a8-41a2-4d86-a385-cb5a63cdfbad`.
