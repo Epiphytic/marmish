@@ -344,6 +344,8 @@ async fn managed_consent_ack_child() {
         assert_eq!(second.sequence(), 2);
         let baseline = fs::read(&cursor).unwrap();
         let clocks = owner.checkpoint.consent_fixture_clocks();
+        assert_eq!(clocks, (retry_wall, retry_wall));
+        assert!(retry_wall < turn.attempt().deadline());
         assert!(matches!(
             port.use_accepted(&ack, |view| view.exact_attempt(&second, url))
                 .unwrap(),
@@ -366,15 +368,19 @@ async fn managed_consent_ack_child() {
         // first attempt. The newer row must independently reject that attempt.
         let stale = port
             .use_accepted(&ack, |view| {
-                owner.settle_managed_consent(quota, turn, view.fixture_at_wall(retry_wall))
+                owner.checkpoint.settle_managed_consent(
+                    &owner.source,
+                    turn.attempt(),
+                    view.fixture_at_wall(retry_wall),
+                    || panic!("stale ACK reached commit"),
+                )
             })
             .unwrap();
-        assert!(matches!(
-            stale,
-            Err(Error::Checkpoint(CheckpointError::Cursor(
-                CursorError::Stale
-            )))
-        ));
+        match stale {
+            Err(CheckpointError::Cursor(CursorError::Stale)) => {}
+            Err(error) => panic!("stale ACK failed at unexpected gate: {error:?}"),
+            Ok(_) => panic!("stale ACK settled a newer attempt"),
+        }
         assert_eq!(owner.checkpoint.consent_fixture_clocks(), clocks);
         assert_eq!(fs::read(&cursor).unwrap(), baseline);
     }
