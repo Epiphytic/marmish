@@ -34,3 +34,19 @@ Carry these review notes into implementation.
 
 The existing first private registration qualification with no engine stays
 independent. This design has no mounted code or release claim.
+
+## First implementation review
+
+Claude Code Sonnet 5.5 in Auto mode **approved** the bounded implementation
+at `26fd90e1ec118ef6150a4ba57299444924c23317` in session
+`629b363b-c290-45d9-9f27-202256a50447`. The reviewer inspected the six changed
+Rust files against the approved design and ran the immutable stock test binary.
+The four new tests and 71 related tests passed, with one related test ignored.
+The reviewer found no blocking issues.
+
+The review confirmed the single retained blocking join, exact admission and
+fence checks, and physical-only disposition when the prelude fails or expires.
+It also identified proof limits. The cancellation regression cuts before the
+first admitted call, and the zero-row timing fixture prints a literal row
+count. The installed started-engine lifecycle and transition-specific cuts in
+the design still require qualification. See the [validation record](../validation/peer-candidate-idle-command-stop.md).
