@@ -38,8 +38,8 @@ impl Admission {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn report_test_custody_failure(&self) {
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    pub(crate) fn report_custody_failure(&self) {
         (self.owner_failed)();
     }
 
