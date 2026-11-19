@@ -86,6 +86,7 @@ fn joined_failure(
         return ApprovalFailure::Unavailable;
     }
     match error {
+        Error::Clock => ApprovalFailure::Clock,
         Error::Path | Error::StageIdentityMismatch => ApprovalFailure::Integrity,
         _ => ApprovalFailure::Stale,
     }
@@ -278,5 +279,38 @@ mod tests {
         ] {
             assert_eq!(reply_status(Ok(decision)), reply);
         }
+    }
+    #[test]
+    fn approval_joined_failure_preserves_proof_path_and_request_causes() {
+        use std::{sync::atomic::AtomicBool, time::Duration};
+        use tokio_util::sync::CancellationToken;
+
+        let (startup, listener, _worker) = crate::peer_candidate_startup::pair();
+        startup.ordinary_ready();
+        listener.registered();
+        let wall = Duration::from_secs(10_000);
+        crate::peer_invitation::native_fence::fixture_retirement_wall(wall, || {
+            let window = crate::peer_invitation::NativeWindow::start(
+                listener.readiness(),
+                Arc::new(AtomicBool::new(false)),
+                CancellationToken::new(),
+                wall,
+                wall.as_secs() + 60,
+            )
+            .unwrap();
+            for (native, live, expected) in [
+                (
+                    Error::StageIdentityMismatch,
+                    true,
+                    ApprovalFailure::Integrity,
+                ),
+                (Error::Path, true, ApprovalFailure::Integrity),
+                (Error::Binding, true, ApprovalFailure::Stale),
+                (Error::Clock, true, ApprovalFailure::Clock),
+                (Error::Binding, false, ApprovalFailure::Unavailable),
+            ] {
+                assert_eq!(joined_failure(native, &window, live), expected);
+            }
+        });
     }
 }

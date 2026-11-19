@@ -270,6 +270,20 @@ fn approval_prewrite_clock_and_exact_retry_leave_the_row_and_floors_unchanged() 
         Err(ApprovalFailure::Stale),
     );
     assert_eq!(case.snapshot(), after);
+    assert_eq!(
+        retry(
+            &mut case.checkpoint.cursor.conn,
+            origin,
+            at,
+            |_, _| Ok((WALL + 2, deadline, Some(at + 1))),
+            |step| match step {
+                ApprovalGuard::Consume => Ok(at + 1),
+                ApprovalGuard::Verify => panic!("retry accepted a regressed stored floor"),
+            },
+        ),
+        Err(ApprovalFailure::Integrity),
+    );
+    assert_eq!(case.snapshot(), after);
 }
 
 #[test]
