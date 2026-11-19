@@ -28,7 +28,7 @@ projection behavior in the next mount.
   a validated private invocation; it cannot be selected from profile
   settings, the installed binaries, IPC workers or stock environment.
   Validate the intent before config and authorization. Both private
-  invocations retain the signed installed-layout, exact prepared-profile
+  invocations retain the digest-pinned installed layout, exact prepared profile
   and distinct qualified Peer/ordinary route requirements.
 - Create a single existing readiness pair for the existing listener path,
   using the exact captured socket path. Add an explicit registration-only

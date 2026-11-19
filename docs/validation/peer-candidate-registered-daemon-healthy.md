@@ -2,7 +2,7 @@
 
 Source `62665aaac2cddc3c3e7fc8959f7fe029b5ebc0fb` was built for Linux
 AMD64 with the glibc 2.39 baseline. The native installer verified the
-signed release manifest and built the versioned layout. The gated
+digest-pinned release manifest and built the versioned layout. The gated
 qualification example reused that layout from a fresh process. The
 test verified the shipped daemon executable as part of the installation
 receipt. The qualification example was the entry point exercised here.
@@ -36,7 +36,7 @@ artifact also passed 36 launch tests in 5.00 seconds, five Command
 startup tests in 36.55 seconds and three healthy-stop tests in
 0.30 seconds.
 
-The signed manifest SHA-256 was
+The manifest SHA-256 was
 `de871184421a7fb69c46da6f431669b13b896ad79de1ece52e279a3b9afbf26e`.
 The installed worker SHA-256 was
 `57ef19570d09d8daec3c16204987ec1912680245aab31db51b4dc362515a1c66`.

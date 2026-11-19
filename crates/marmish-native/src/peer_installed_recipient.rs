@@ -294,10 +294,10 @@ async fn revoke_and_reap(
     route: &ReceiverRouteControl<'_, '_>,
     drain: &PeerSocketDrain,
 ) {
-    #[cfg(test)]
-    tests::panic_at("panic_in_reap");
     drop(ready);
     route.revoke();
+    #[cfg(test)]
+    tests::panic_at("panic_in_reap");
     while drain.reap(Instant::now() + DRAIN_WAIT).await.is_err() {
         // A physical reap which cannot be proved leaves this worker alive,
         // with its attached quota, keyed cursor and original profile intact.
