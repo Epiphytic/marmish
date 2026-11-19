@@ -207,6 +207,7 @@ async fn fresh_idle_recipient(mode: &'static str) {
     assert!(peer.runtime_socket_active(background_peer));
     unavailable(&socket).await;
 
+    let requests_before_loss = peer.recipient_requests(signer);
     peer.retire_recipient_runtime_socket(background_peer, signer);
     eventually("relay-initiated recipient socket closed", || {
         peer.runtime_socket_end(background_peer).is_some()
@@ -219,11 +220,7 @@ async fn fresh_idle_recipient(mode: &'static str) {
     let second_command = begin.elapsed();
     assert!(ordinary.publication_attempts(445) > ordinary_before);
     assert_eq!(peer.qualification_connections(), background_peer);
-    if manual {
-        assert_manual_requests(&peer, signer, background_peer);
-    } else {
-        assert_eq!(peer.recipient_requests(signer), 1);
-    }
+    assert_eq!(peer.recipient_requests(signer), requests_before_loss);
     wait_active(&mut child, &socket).await;
     unavailable(&socket).await;
     child.stop().await;

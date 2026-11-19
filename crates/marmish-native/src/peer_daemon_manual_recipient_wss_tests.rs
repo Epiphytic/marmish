@@ -164,7 +164,7 @@ async fn mounted() {
     };
     unavailable(&socket).await;
     let delivered = founder.publish_delivery(&consented, deadline).await;
-    pending(&socket, &offered, &delivered, deadline).await;
+    let exact = pending(&socket, &offered, &delivered, deadline).await;
     let offer_to_pending = turn.elapsed();
     for id in [offered.carrier(), consented.carrier(), delivered.carrier] {
         assert_eq!(peer.accepted_manual_control_count(id), 1);
@@ -186,6 +186,7 @@ async fn mounted() {
     assert!(peer.runtime_socket_active(recipient));
     pending(&socket, &offered, &delivered, Instant::now() + STEP).await;
 
+    let requests_before_loss = peer.recipient_requests(signer);
     let clock = Instant::now();
     peer.retire_recipient_runtime_socket(recipient, signer);
     eventually("relay closed exact Manual runtime", || {
@@ -214,7 +215,7 @@ async fn mounted() {
     unavailable(&socket).await;
     wait_active(&mut child, &socket).await;
     assert_eq!(peer.qualification_connections(), recipient + 1);
-    assert_manual_requests(&peer, signer, recipient);
+    assert_eq!(peer.recipient_requests(signer), requests_before_loss);
     assert_eq!(peer.all_publication_attempts(), 3);
     assert_eq!(ordinary.publication_attempts(7435), 0);
 
@@ -222,6 +223,27 @@ async fn mounted() {
     let clock = Instant::now();
     child.stop().await;
     let stopped = clock.elapsed();
+    assert!(!socket.exists());
+    drop(ProfileLease::acquire_ready(root.path(), PROFILE).unwrap());
+
+    // Reopen exactly the same profile with an independently started Manual
+    // process before letting stock observe the ordinary retained results.
+    let clock = Instant::now();
+    let (mut reopened, mut report, _) = provisional(&example, &args, root.path()).await;
+    assert_eq!(peer.qualification_connections(), recipient + 1);
+    unavailable(&socket).await;
+    acknowledge(&mut report).await;
+    drop(report);
+    wait_active(&mut reopened, &socket).await;
+    let reopened_recipient = recipient + 2;
+    manual_recipient_live(&peer, signer, reopened_recipient).await;
+    assert_eq!(
+        pending(&socket, &offered, &delivered, Instant::now() + WAIT).await,
+        exact,
+    );
+    let cold_pending = clock.elapsed();
+    assert_eq!(peer.all_publication_attempts(), 3);
+    reopened.stop().await;
     assert!(!socket.exists());
     drop(ProfileLease::acquire_ready(root.path(), PROFILE).unwrap());
 
@@ -238,13 +260,14 @@ async fn mounted() {
     peer.stop().await;
     ordinary.stop().await;
     println!(
-        "manual installed pending=1 command_rows=2 startup_ms={} offer_to_pending_ms={} active_command_ms={} lost_to_unavailable_ms={} post_loss_command_ms={} stop_ms={} cold_stock_ms={}",
+        "manual installed pending=1 command_rows=2 startup_ms={} offer_to_pending_ms={} active_command_ms={} lost_to_unavailable_ms={} post_loss_command_ms={} stop_ms={} cold_pending_ms={} cold_stock_ms={}",
         startup.as_millis(),
         offer_to_pending.as_millis(),
         first_time.as_millis(),
         lost.as_millis(),
         second_time.as_millis(),
         stopped.as_millis(),
+        cold_pending.as_millis(),
         cold.as_millis(),
     );
 }
