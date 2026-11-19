@@ -51,6 +51,15 @@ observations over loopback WSS.
 Private qualification helper SHA-256
 `dc85a0060760428d96d112580eab01f992ef708b6bcc45d59053272d915f4711`.
 
+The two other controllers that used the corrected account mapping were
+also run against the exact installed artifacts. The retained-command test
+passed in 27.45 seconds. The dispatcher-loss test passed its Ready scenario,
+then failed with an early control EOF during the Status scenario in 22.62
+seconds. Three sequential reruns with `RUST_MIN_STACK=33554432` all passed
+(24.22, 23.93 and 24.17 seconds). That environment change is a fixture
+diagnostic. The original run did not classify the exit, and the reruns do
+not establish the cause or resolve the intermittency.
+
 Earlier runs at `1be3388` and `a73c9af` reached the authenticated live
 route but timed out waiting for Consent. The fixture had put the ordinary
 command identity in the relay's primary founder slot. Its extra writer
