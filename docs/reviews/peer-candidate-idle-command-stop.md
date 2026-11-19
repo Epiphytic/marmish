@@ -60,3 +60,22 @@ trusted prelude poll rejects a disconnected engine even before the worker
 thread finishes. The existing Copy GC flag keeps queued and unapplied work
 busy. Review was by source inspection. The separate Linux AMD64 author
 checks ran the affected tests and passed strict stock and candidate Clippy.
+
+## Composed registered daemon review
+
+Claude Code Sonnet 5.5 in Auto mode approved composed source
+`918b92cbcf74d79483cc1219ded34bd0ffe356a3` in session
+`df66a84d-ef0f-46d0-8b2d-4591780fef1e`. The review compared the
+private daemon integration with the reviewed idle and worker-liveness
+sources. It checked that failed or expired prelude attempts cannot
+authorize cleanup, the owned engine and lease survive canceled
+observations, and stock turn behavior is unchanged.
+
+The reviewer independently reran 32 in-process and owner tests in
+54.85 seconds in Auto session `92968976-1c12-426c-ad03-3814147885ac`.
+It confirmed the executable hash before and after the run. The review
+notes a remaining timing robustness limit. A successful prelude late
+in a one-second physical observation slice can leave little time
+for the single graceful attempt. Exhausting that time keeps the
+evidence and yields a nonzero exit. The started-engine installed
+scenario and per-subeffect interruptions still need live evidence.

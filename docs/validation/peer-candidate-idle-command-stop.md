@@ -43,3 +43,27 @@ The empty-engine case independently counted its retained rows through the
 Journal and measured 38.07 ms with zero rows. This is one report-only
 sample. This follow-up has no candidate runtime rerun or installed-runtime
 qualification. See the [independent source review](../reviews/peer-candidate-idle-command-stop.md#worker-liveness-follow-up).
+
+## Composed Linux AMD64 runs
+
+Exact composed source `918b92cbcf74d79483cc1219ded34bd0ffe356a3`
+passed stock all-target strict Clippy (28.12 s), candidate all-target
+strict Clippy (36.94 s) and a candidate unit link (48.04 s). The author
+ran nine focused cases covering the idle prelude, engine-liveness and
+Copy GC refusals, the no-engine bypass and physical ownership.
+The independently counted empty engine completed its prelude and
+physical stop in 50.88 ms in one in-process sample.
+
+Claude independently ran 32 cases from the immutable candidate runner
+in 54.85 s, including real in-process engine stops and Command service
+regressions. The candidate executable SHA-256 was
+`69524796731e10e7243cc5c52dda3fe52f417faad983307bccf82456e789d91f`.
+The author also ran the existing stock GitHub Actions selectors locally
+on Linux AMD64. All 36 selectors completed in 94.81 s with 160 passes
+and four opt-in cases skipped. This duration includes a warm local
+build cache and the test links, and is not a runner time estimate.
+
+The exact [independent review](../reviews/peer-candidate-idle-command-stop.md#composed-registered-daemon-review)
+covers the source integration and its local runtime tests. Live
+installed Both with retained results, effect-boundary loss, macOS and
+Linux ARM64 have separate validation.
