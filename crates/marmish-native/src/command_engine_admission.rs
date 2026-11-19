@@ -43,6 +43,19 @@ impl Admission {
         (self.owner_failed)();
     }
 
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(
+        dead_code,
+        reason = "ordinary candidate physical cut remains unmounted"
+    )]
+    pub(super) fn is_for(&self, fatal: &Fatal) -> bool {
+        self.fatal.same_lifetime(fatal)
+    }
+
     pub(super) fn tripped(&self) -> bool {
         self.fatal.is_tripped()
     }

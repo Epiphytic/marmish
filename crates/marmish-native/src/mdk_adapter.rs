@@ -3091,6 +3091,18 @@ mod terminal_enrollment_transport;
 #[path = "terminal_room_fixture.rs"]
 mod terminal_room_fixture;
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(
+    dead_code,
+    reason = "ordinary candidate physical cut remains unmounted"
+)]
+#[path = "mdk_owner_physical_cut.rs"]
+mod physical_cut;
+
 #[cfg(test)]
 #[path = "terminal_relay_fixture.rs"]
 pub(crate) mod terminal_relay_fixture;

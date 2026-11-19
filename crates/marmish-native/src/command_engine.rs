@@ -579,6 +579,24 @@ impl CommandEngine {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
+    #[allow(
+        dead_code,
+        reason = "ordinary candidate physical cut remains unmounted"
+    )]
+    pub(crate) fn can_join_dispatcher_cut(&self, fatal: &crate::dispatcher_fatal::Fatal) -> bool {
+        fatal.is_tripped()
+            && self
+                .mode
+                .checked
+                .as_ref()
+                .is_some_and(|mode| mode.is_for(fatal))
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     #[allow(dead_code, reason = "candidate engine remains unmounted")]
     pub(crate) fn into_fatal_join(mut self) -> std::result::Result<FatalEngineJoin, Box<Self>> {
         if !self.mode.tripped() {
