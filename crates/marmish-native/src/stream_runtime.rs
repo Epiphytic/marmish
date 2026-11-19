@@ -985,9 +985,13 @@ impl MdkOwner {
             })
     }
     pub(crate) fn progress_streams(&mut self) -> Result<()> {
+        self.active_mode.admit()?;
         self.prepare_streams()?;
+        self.active_mode.admit()?;
         self.apply_stream_preparations()?;
+        self.active_mode.admit()?;
         self.observe_stream_runners()?;
+        self.active_mode.admit()?;
         self.reclaim_stream_state()
     }
     fn copy_helper_context(
@@ -1604,6 +1608,8 @@ impl MdkOwner {
         self.journal.streams_idle()
     }
     pub(super) async fn submit_stream_publications(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         let mut publications = self
             .journal
             .stream_publications()?
@@ -1616,6 +1622,7 @@ impl MdkOwner {
             .collect::<Result<Vec<_>>>()?;
         publications.sort_by_key(|(ordinary, _)| *ordinary);
         for (_, previous) in publications {
+            mode.admit()?;
             let Some(mut p) = self
                 .journal
                 .stream_publication(&previous.group, &previous.event_id)?
@@ -1640,7 +1647,11 @@ impl MdkOwner {
             }
             let context = match self.command_context(&group) {
                 Ok(c) => c,
-                Err(_) => {
+                Err(error) => {
+                    mode.admit()?;
+                    if matches!(error, Error::Storage(super::DISPATCHER_LOST)) {
+                        return Err(error);
+                    }
                     self.journal
                         .stream_publication_state(&p.group, &p.event_id, "failed")?;
                     continue;
@@ -1672,15 +1683,16 @@ impl MdkOwner {
                 .stream_publication_state(&p.group, &p.event_id, "prepared")?;
             #[cfg(test)]
             let updates = self.terminal_authority.stage(Some(&group));
-            let effects = match tokio::time::timeout_at(
-                deadline,
-                self.runtime.send(SendIntent::AppMessage {
-                    group_id: group,
-                    payload: p.payload,
-                    expected_epoch: None,
-                }),
-            )
-            .await
+            let effects = match mode
+                .native(tokio::time::timeout_at(
+                    deadline,
+                    self.runtime.send(SendIntent::AppMessage {
+                        group_id: group,
+                        payload: p.payload,
+                        expected_epoch: None,
+                    }),
+                ))
+                .await?
             {
                 Ok(Ok(effects)) => effects,
                 _ => {
@@ -1691,6 +1703,7 @@ impl MdkOwner {
                 }
             };
             for queued in &effects.queued {
+                mode.admit()?;
                 if queued.group_id.as_slice() != p.group {
                     return Err(invalid());
                 }
@@ -1701,6 +1714,7 @@ impl MdkOwner {
                 )?;
             }
             self.apply_effects(effects, deadline).await?;
+            mode.admit()?;
             #[cfg(test)]
             self.terminal_finish(updates);
         }

@@ -1,4 +1,6 @@
 //! One actor owns the MDK handle, application journal, signer and relay plane.
+#[path = "mdk_active.rs"]
+mod active;
 #[path = "command_adapter.rs"]
 mod command_adapter;
 #[path = "command_check.rs"]
@@ -10,6 +12,7 @@ mod command_runtime;
 #[cfg(feature = "installed-checks")]
 #[path = "installed_check.rs"]
 pub(crate) mod installed_check;
+use active::{ActiveMode, DISPATCHER_LOST};
 #[path = "mdk_startup.rs"]
 mod startup;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -75,7 +78,7 @@ use transport_nostr_adapter::{
 use transport_nostr_peeler::{MarmotNostrSigner, NostrMlsPeeler, NostrTransportEvent};
 use zeroize::Zeroizing;
 
-type Runtime = AccountDeviceRuntime<PublicationGate, ExplicitRouting, Publisher>;
+type Runtime = AccountDeviceRuntime<PublicationGate, ExplicitRouting, ActivePublisher>;
 const PURPOSE: &str = "marmish/v2 identity transport";
 const PREFIX: &str = "marmish/v2/";
 
@@ -529,6 +532,7 @@ fn recover_relay(relay: &nostr_sdk::relay::Relay) -> Result<bool> {
 /// Returning a typed retryable failure preserves the exact native obligation.
 #[derive(Clone)]
 struct PublicationGate {
+    mode: ActiveMode,
     inner: NostrTransportAdapter,
     paused: Arc<AtomicBool>,
     loss: tokio::sync::watch::Receiver<Option<NostrNotificationLoss>>,
@@ -553,12 +557,18 @@ impl TransportAdapter for PublicationGate {
         &self,
         value: TransportAccountActivation,
     ) -> std::result::Result<(), TransportAdapterError> {
+        self.mode
+            .admit()
+            .map_err(|_| TransportAdapterError::Subscription(DISPATCHER_LOST.into()))?;
         self.inner.activate_account(value).await
     }
     async fn sync_account_groups(
         &self,
         value: TransportGroupSync,
     ) -> std::result::Result<(), TransportAdapterError> {
+        self.mode
+            .admit()
+            .map_err(|_| TransportAdapterError::Subscription(DISPATCHER_LOST.into()))?;
         self.inner.sync_account_groups(value).await
     }
     async fn deactivate_account(
@@ -576,7 +586,14 @@ impl TransportAdapter for PublicationGate {
         &self,
         request: TransportPublishRequest,
     ) -> std::result::Result<TransportPublishReport, TransportAdapterError> {
-        if self.blocked() {
+        let refusal = if self.mode.admit().is_err() {
+            Some(DISPATCHER_LOST)
+        } else if self.blocked() {
+            Some("recovery_paused")
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
             let failed = request
                 .target
                 .endpoints()
@@ -584,7 +601,7 @@ impl TransportAdapter for PublicationGate {
                 .cloned()
                 .map(|endpoint| TransportEndpointFailure {
                     endpoint,
-                    reason: "recovery_paused".into(),
+                    reason: refusal.into(),
                     kind: TransportEndpointFailureKind::RetryableUnavailable,
                     rejection_category: None,
                     size_class: None,
@@ -592,7 +609,7 @@ impl TransportAdapter for PublicationGate {
                 })
                 .collect();
             return Err(TransportAdapterError::PublishEndpoints(
-                TransportPublishFailure::with_endpoint_failures("recovery_paused", failed),
+                TransportPublishFailure::with_endpoint_failures(refusal, failed),
             ));
         }
         self.inner.publish(request).await
@@ -860,7 +877,40 @@ impl KeyPackagePublisher for Publisher {
     }
 }
 
+/// Only the ordinary owner binds these callbacks to candidate admission.
+struct ActivePublisher {
+    inner: Publisher,
+    mode: ActiveMode,
+}
+
+#[async_trait]
+impl KeyPackagePublisher for ActivePublisher {
+    async fn prepare_key_package(
+        &self,
+        publication: KeyPackagePublication,
+    ) -> std::result::Result<SignedPublicationArtifact, KeyPackagePublishError> {
+        self.mode
+            .admit()
+            .map_err(|_| KeyPackagePublishError::unexposed(DISPATCHER_LOST))?;
+        self.inner.prepare_key_package(publication).await
+    }
+
+    async fn publish_prepared_key_package(
+        &self,
+        publication: &KeyPackagePublication,
+        artifact: &SignedPublicationArtifact,
+    ) -> std::result::Result<KeyPackagePublishReceipt, KeyPackagePublishError> {
+        self.mode
+            .admit()
+            .map_err(|_| KeyPackagePublishError::unexposed(DISPATCHER_LOST))?;
+        self.inner
+            .publish_prepared_key_package(publication, artifact)
+            .await
+    }
+}
+
 pub struct MdkOwner {
+    active_mode: ActiveMode,
     runtime: Runtime,
     storage: SqliteAccountStorage,
     journal: Journal,
@@ -1076,7 +1126,9 @@ impl MdkOwner {
         let notification_loss = relay
             .notification_loss()
             .map_err(|_| Error::Transport("notification_watch"))?;
+        let active_mode = ActiveMode::from_startup(mode);
         let publication = PublicationGate {
+            mode: active_mode.clone(),
             inner: adapter.clone(),
             paused: Arc::new(AtomicBool::new(false)),
             loss: notification_loss.clone(),
@@ -1089,14 +1141,18 @@ impl MdkOwner {
                 Ok::<_, marmot_session::SessionError>((
                     publication.clone(),
                     routing.clone(),
-                    Publisher {
-                        keys,
-                        relay: relay.clone(),
+                    ActivePublisher {
+                        mode: active_mode.clone(),
+                        inner: Publisher {
+                            keys,
+                            relay: relay.clone(),
+                        },
                     },
                 ))
             }))
         })?;
         Ok(Self {
+            active_mode,
             runtime,
             storage,
             journal: startup.journal.take().expect("startup Journal is open"),
@@ -1190,6 +1246,7 @@ impl MdkOwner {
         Ok(groups.into_values().collect())
     }
     fn reconcile_orphans(&mut self) -> Result<()> {
+        self.active_mode.admit()?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let joins: BTreeSet<_> = pending
             .iter()
@@ -1202,6 +1259,7 @@ impl MdkOwner {
             })
             .collect();
         for group in self.native_group_union()? {
+            self.active_mode.admit()?;
             if self
                 .journal
                 .conversation_by_group(group.as_slice())?
@@ -1219,6 +1277,7 @@ impl MdkOwner {
                     if foundation::classify_new_id(&session, current, self.journal.replay_floor()?)?
                         == foundation::Freshness::Eligible
                     {
+                        self.active_mode.admit()?;
                         self.journal.reject_group_at(
                             group.as_slice(),
                             Some(foundation::id_timestamp(&session)?),
@@ -1231,6 +1290,7 @@ impl MdkOwner {
                 Err(Error::Transport("group_state_unavailable")) => {}
                 Err(e) => return Err(e),
             }
+            self.active_mode.admit()?;
             self.remove_owned_route(&group);
             self.forget_and_confirm(&group)?;
         }
@@ -1240,6 +1300,7 @@ impl MdkOwner {
         Ok(())
     }
     fn maintain_journal(&mut self) -> Result<()> {
+        self.active_mode.admit()?;
         let mut protected: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut command_protection = crate::journal::CommandProtection::default();
         // Defensive compatibility with storage that retains invalidations. At
@@ -1253,6 +1314,7 @@ impl MdkOwner {
                 ..
             } = event
             {
+                self.active_mode.admit()?;
                 self.invalidate_stream_projection(group_id.as_slice())?;
                 self.journal
                     .stream_publication_invalidated(group_id.as_slice(), message_id.as_slice())?;
@@ -1261,6 +1323,7 @@ impl MdkOwner {
                     .insert(group_id.as_slice().to_vec());
             }
         }
+        self.active_mode.admit()?;
         let fanouts = mdk(self.storage.list_outbound_fanouts())?;
         protected.extend(
             fanouts
@@ -1292,6 +1355,7 @@ impl MdkOwner {
                 .map(|(g, _)| g.as_slice().to_vec()),
         );
         for group in self.native_group_union()? {
+            self.active_mode.admit()?;
             let queued = mdk(self.storage.list_queued_outbound_intents(&group))?;
             for intent in &queued {
                 command_protection
@@ -1304,8 +1368,10 @@ impl MdkOwner {
         }
         protected.extend(self.journal.stream_records()?.into_iter().map(|r| r.group));
         command_protection.groups = protected.clone();
+        self.active_mode.admit()?;
         self.journal.command_maintain(now()?, &command_protection)?;
         if command_protection.invalidation_groups.is_empty() {
+            self.active_mode.admit()?;
             self.journal
                 .maintain(now()?, self.retention_secs(), &protected)?;
         }
@@ -1332,6 +1398,13 @@ impl MdkOwner {
         }
         Ok(())
     }
+    /// The eventual registered caller rechecks this before exposing a response
+    /// and before flattening ordinary owner errors into wire or retry results.
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    #[allow(dead_code, reason = "candidate active owner remains unmounted")]
+    pub(crate) fn check_active_admission(&self) -> Result<()> {
+        self.active_mode.admit()
+    }
     pub fn opened_binding(&self) -> &OpenedAccountBinding {
         &self.binding
     }
@@ -1345,7 +1418,9 @@ impl MdkOwner {
         self.journal.received_page(after, limit)
     }
     pub fn status(&self) -> Result<RuntimeStatus> {
+        self.active_mode.admit()?;
         let (conversations, received, pending) = self.journal.status_counts()?;
+        self.active_mode.admit()?;
         Ok(RuntimeStatus {
             identity: self.identity.clone(),
             conversations,
@@ -1538,11 +1613,14 @@ impl MdkOwner {
         Ok(())
     }
     pub async fn activate(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         self.pending_budget = 64;
         if self.active {
             return Ok(());
         }
-        self.connector.bootstrap(deadline).await?;
+        mode.native(self.connector.bootstrap(deadline)).await??;
+        mode.admit()?;
         if self.forwarder.is_none() {
             self.forwarder = Some(
                 self.relay
@@ -1551,38 +1629,49 @@ impl MdkOwner {
         }
         self.ensure_ingress()?;
         for endpoint in self.connector.policy().urls() {
-            connect_configured_relay(&self.connector, &self.client, endpoint, deadline).await?;
+            mode.native(connect_configured_relay(
+                &self.connector,
+                &self.client,
+                endpoint,
+                deadline,
+            ))
+            .await??;
         }
-        // Ordinary drain does not drive KeyPackage maintenance. Readiness
-        // requires an actual acknowledged publication of this device's stable
-        // slot; restart republishing reuses its durable signed artifact.
-        tokio::time::timeout_at(deadline, self.runtime.republish_key_package())
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(|_| {
-                crate::diagnostics::event("mdk_key_package_publish", "failed");
-                Error::Mdk("key_package_publish")
-            })?;
-        tokio::time::timeout_at(deadline, self.runtime.activate_transport(None))
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(|_| Error::Transport("activate"))?;
-        // Drain may publish. All transport admission and Arti bootstrap above
-        // must therefore finish first. Reconcile retained pending work before
-        // accepting a fresh command from IPC.
+        // Readiness waits for acknowledged KeyPackage publication. MDK may
+        // reuse its durable signed artifact. Retained work is then replayed.
+        mode.native(async {
+            tokio::time::timeout_at(deadline, self.runtime.republish_key_package()).await
+        })
+        .await?
+        .map_err(|_| Error::Timeout)?
+        .map_err(|_| {
+            crate::diagnostics::event("mdk_key_package_publish", "failed");
+            Error::Mdk("key_package_publish")
+        })?;
+        mode.native(async {
+            tokio::time::timeout_at(deadline, self.runtime.activate_transport(None)).await
+        })
+        .await?
+        .map_err(|_| Error::Timeout)?
+        .map_err(|_| Error::Transport("activate"))?;
         let updates = self.terminal_authority.stage(None);
-        let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
-            .await
+        let effects = mode
+            .native(async { tokio::time::timeout_at(deadline, self.runtime.drain()).await })
+            .await?
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
+        mode.admit()?;
         self.terminal_finish(updates);
         self.replay_pending(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
+        mode.admit()?;
         self.ensure_ingress()?;
         self.active = true;
         Ok(())
     }
     async fn discover(&self, peer: &str, deadline: Instant) -> Result<KeyPackage> {
+        let mode = &self.active_mode;
+        mode.admit()?;
         use nostr::filter::Filter;
         use nostr_sdk::client::ReqTarget;
         use nostr_sdk::relay::{AcquisitionEnd, AcquisitionLimits};
@@ -1596,19 +1685,19 @@ impl MdkOwner {
             if left.is_zero() {
                 return Err(Error::Timeout);
             }
-            let h = self
-                .client
-                .acquire_events(
+            let h = mode
+                .native(self.client.acquire_events(
                     ReqTarget::single(
                         endpoint.as_str(),
                         [Filter::new().author(peerkey).kind(Kind::Custom(30443))],
                     ),
                     AcquisitionLimits::new(1, 17, 4 * 1024 * 1024 - total, left),
-                )
-                .await
+                ))
+                .await?
                 .map_err(|_| Error::Transport("key_package_query"))?;
-            let report = tokio::time::timeout_at(operation, h.finish())
-                .await
+            let report = mode
+                .native(tokio::time::timeout_at(operation, h.finish()))
+                .await?
                 .map_err(|_| Error::Timeout)?
                 .map_err(|_| Error::Transport("key_package_query"))?;
             for result in report.relays.into_values() {
@@ -1917,6 +2006,7 @@ impl MdkOwner {
         _deadline: Instant,
     ) -> Result<()> {
         for event in &effects.events {
+            self.active_mode.admit()?;
             if let GroupEvent::QueuedIntentRefused {
                 group_id,
                 intent_id,
@@ -1936,11 +2026,14 @@ impl MdkOwner {
                     .invalidate(group_id.as_slice(), message_id.as_slice())?;
             }
         }
+        self.active_mode.admit()?;
         self.project_stream_publication_effects(&effects)?;
+        self.active_mode.admit()?;
         self.project_application_publications(&effects)?;
         // Always process the durable queue: it survives a crash between MDK
         // acceptance and the application's transaction. Never acknowledge a
         // message before its projection and deterministic receipt intent exist.
+        self.active_mode.admit()?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let pending_joins: BTreeSet<Vec<u8>> = pending
             .iter()
@@ -1970,6 +2063,7 @@ impl MdkOwner {
         selected.sort_by_key(|event| !matches!(event, GroupEvent::GroupJoined { .. }));
         let command_proofs = self.command_publication_proofs(&[])?;
         for event in selected {
+            self.active_mode.admit()?;
             let result = match event {
                 event @ GroupEvent::GroupJoined { .. } if self.is_command_join(&event)? => {
                     self.project_command_join(event)
@@ -2014,6 +2108,7 @@ impl MdkOwner {
                                 .cloned(),
                         },
                     ])?;
+                    self.active_mode.admit()?;
                     mdk(self
                         .storage
                         .delete_pending_application_events(&[message_id]))
@@ -2032,6 +2127,7 @@ impl MdkOwner {
         }
         // Frozen canonical metadata makes any trust-relevant modification a
         // terminal revocation, including membership changes between deliveries.
+        self.active_mode.admit()?;
         self.rebuild_routes()?;
         if !effects.failures.is_empty() || !effects.welcome_failures.is_empty() {
             crate::diagnostics::event("mdk_publish", "degraded_retained");
@@ -2066,8 +2162,10 @@ impl MdkOwner {
         Ok(())
     }
     fn forget_and_confirm(&mut self, group: &GroupId) -> Result<()> {
+        self.active_mode.admit()?;
         self.terminal_authority.retire(group.as_slice());
         mdk(self.runtime.forget_group_local(group))?;
+        self.active_mode.admit()?;
         let pending = mdk(self.storage.list_pending_application_events())?;
         let remains = pending.iter().any(|e| match e {
             GroupEvent::GroupJoined { group_id, .. }
@@ -2078,6 +2176,7 @@ impl MdkOwner {
         if remains {
             return Err(Error::Storage("group_cleanup_pending"));
         }
+        self.active_mode.admit()?;
         self.journal.mark_group_cleanup_complete(group.as_slice())
     }
     fn project_join(&mut self, event: GroupEvent) -> Result<()> {
@@ -2311,7 +2410,10 @@ impl MdkOwner {
         }))
     }
     async fn submit_unsubmitted(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         for p in self.journal.unsubmitted()?.into_iter().take(64) {
+            mode.admit()?;
             if foundation::id_timestamp(p.envelope.id())? < self.journal.replay_floor()? {
                 self.journal.mark(&p.group, &p.event_id, "expired")?;
                 continue;
@@ -2323,19 +2425,21 @@ impl MdkOwner {
             // after this point must never regenerate ciphertext without proof.
             self.journal.mark(&p.group, &p.event_id, "prepared")?;
             let updates = self.terminal_authority.stage(Some(&group));
-            let effects = tokio::time::timeout_at(
-                deadline,
-                self.runtime.send(SendIntent::AppMessage {
-                    group_id: group,
-                    payload: p.encoded,
-                    expected_epoch: None,
-                }),
-            )
-            .await
-            .map_err(|_| Error::Timeout)?;
+            let effects = mode
+                .native(tokio::time::timeout_at(
+                    deadline,
+                    self.runtime.send(SendIntent::AppMessage {
+                        group_id: group,
+                        payload: p.encoded,
+                        expected_epoch: None,
+                    }),
+                ))
+                .await?
+                .map_err(|_| Error::Timeout)?;
             let effects = mdk(effects)?;
             self.bind_queued(&effects, &p.event_id)?;
             self.apply_effects(effects, deadline).await?;
+            mode.admit()?;
             self.terminal_finish(updates);
         }
         Ok(())
@@ -2344,13 +2448,16 @@ impl MdkOwner {
         // A crash before or during send may leave a prepared journal record
         // without enough MDK evidence to classify exposure. Do not manufacture
         // fresh ciphertext or a second application event in that case.
+        self.active_mode.admit()?;
         for p in self.journal.pending()? {
+            self.active_mode.admit()?;
             let group = GroupId::new(p.group.clone());
             let fanouts = mdk(self.runtime.outbound_fanouts_for_group(&group))?;
             if !fanouts.iter().any(|f| {
                 f.application_message()
                     .is_some_and(|a| a.app_event_id == p.event_id)
             }) {
+                self.active_mode.admit()?;
                 self.journal.mark(&p.group, &p.event_id, "uncertain")?;
             }
         }
@@ -2359,6 +2466,8 @@ impl MdkOwner {
     async fn drive_retained(&mut self, deadline: Instant) -> Result<()> {
         // These native obligations survive cross-store crashes. Re-delivery
         // reuses the stored Welcome and its original target, never a new group.
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         let owed = mdk(self.runtime.outstanding_welcome_deliveries())?;
         if owed.len() > 4096 {
             return Err(Error::Storage("welcome_capacity"));
@@ -2366,12 +2475,15 @@ impl MdkOwner {
         let live: BTreeSet<_> = owed.iter().map(|(_, m)| m.id.as_slice().to_vec()).collect();
         self.welcome_retry.retain(|id, _| live.contains(id));
         for (group, message) in owed.into_iter().take(64) {
+            mode.admit()?;
             match self.ensure_application_group(&group) {
                 Ok(()) => {}
                 Err(Error::Mdk(_)) => {
                     // A cross-store crash can retain a native Welcome without
                     // an application acceptance. Never publish that orphan.
+                    mode.admit()?;
                     self.reconcile_orphans()?;
+                    mode.admit()?;
                     self.remove_owned_route(&group);
                     if self.journal.command_room(group.as_slice())?.is_some() {
                         self.command_forget_and_confirm(&group)?;
@@ -2382,6 +2494,7 @@ impl MdkOwner {
                 }
                 Err(error) => return Err(error),
             }
+            mode.admit()?;
             let id = message.id.as_slice().to_vec();
             if self
                 .welcome_retry
@@ -2400,12 +2513,16 @@ impl MdkOwner {
                 ),
             );
             let updates = self.terminal_authority.stage(Some(&group));
-            let effects =
-                tokio::time::timeout_at(deadline, self.runtime.redeliver_welcome(&message.id))
-                    .await
-                    .map_err(|_| Error::Timeout)?
-                    .map_err(|_| Error::Transport("welcome_retry"))?;
+            let effects = mode
+                .native(tokio::time::timeout_at(
+                    deadline,
+                    self.runtime.redeliver_welcome(&message.id),
+                ))
+                .await?
+                .map_err(|_| Error::Timeout)?
+                .map_err(|_| Error::Transport("welcome_retry"))?;
             self.apply_effects(effects, deadline).await?;
+            mode.admit()?;
             self.terminal_finish(updates);
         }
         for c in self
@@ -2436,12 +2553,14 @@ impl MdkOwner {
         true
     }
     async fn recover_transport(&mut self, deadline: Instant) -> Result<bool> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         let loss = self.notification_loss.borrow().clone();
         let stopped = self
             .forwarder
             .as_ref()
             .is_none_or(|task| task.is_finished());
-        let connected = self.network_connected().await;
+        let connected = mode.native(self.network_connected()).await?;
         if !self.recovery && (stopped || loss != self.loss_baseline || !connected) {
             self.terminal_authority.retire_all();
             self.recovery = true;
@@ -2463,6 +2582,7 @@ impl MdkOwner {
                 if let Some(task) = self.forwarder.take() {
                     let _ = tokio::time::timeout_at(deadline, task).await;
                 }
+                mode.admit()?;
                 self.forwarder = Some(
                     self.relay
                         .spawn_notification_forwarder(self.adapter.clone()),
@@ -2473,28 +2593,41 @@ impl MdkOwner {
                 if Instant::now() >= deadline {
                     return Err(Error::Timeout);
                 }
-                let relay = tokio::time::timeout_at(deadline, self.client.relay(endpoint.as_str()))
-                    .await
+                let relay = mode
+                    .native(tokio::time::timeout_at(
+                        deadline,
+                        self.client.relay(endpoint.as_str()),
+                    ))
+                    .await?
                     .map_err(|_| Error::Timeout)?
                     .map_err(|_| Error::Transport("relay_reconnect"))?
                     .ok_or(Error::Transport("relay_reconnect"))?;
                 all_connected &= recover_relay(&relay)?;
             }
-            if !all_connected || !self.network_connected().await {
+            if !all_connected || !mode.native(self.network_connected()).await? {
                 return Err(Error::Transport("relay_reconnect"));
             }
             self.loss_baseline = self.notification_loss.borrow().clone();
-            tokio::time::timeout_at(deadline, self.runtime.activate_transport(None))
-                .await
-                .map_err(|_| Error::Timeout)?
-                .map_err(|_| Error::Transport("recovery_subscription"))?;
+            mode.native(tokio::time::timeout_at(
+                deadline,
+                self.runtime.activate_transport(None),
+            ))
+            .await?
+            .map_err(|_| Error::Timeout)?
+            .map_err(|_| Error::Transport("recovery_subscription"))?;
             self.recovery_subscribed = true;
         }
         Ok(false)
     }
     async fn receive_one(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
         let receive_deadline = deadline.min(Instant::now() + Duration::from_millis(20));
-        match tokio::time::timeout_at(receive_deadline, self.adapter.receive()).await {
+        match mode
+            .native(async {
+                tokio::time::timeout_at(receive_deadline, self.adapter.receive()).await
+            })
+            .await?
+        {
             Ok(Ok(Some(delivery))) => {
                 crate::diagnostics::event(
                     "mdk_delivery",
@@ -2514,10 +2647,13 @@ impl MdkOwner {
                         .delivery_group(&delivery.message.envelope);
                     self.terminal_authority.stage(group.as_ref())
                 };
-                let effects =
-                    tokio::time::timeout_at(deadline, self.runtime.ingest_delivery(&delivery))
-                        .await
-                        .map_err(|_| Error::Timeout)?;
+                let effects = mode
+                    .native(async {
+                        tokio::time::timeout_at(deadline, self.runtime.ingest_delivery(&delivery))
+                            .await
+                    })
+                    .await?
+                    .map_err(|_| Error::Timeout)?;
                 let effects = effects.map_err(|_| Error::Transport("ingest_deferred"))?;
                 crate::diagnostics::event(
                     "mdk_ingest",
@@ -2538,15 +2674,20 @@ impl MdkOwner {
                     crate::diagnostics::event("mdk_delivery", "no_application_events");
                 }
                 let projected = self.apply_effects(effects.effects, deadline).await;
+                mode.admit()?;
                 self.terminal_after_ingest(updates, &effects.outcome, durable, projected)?;
                 if durable {
-                    self.adapter
-                        .ack_replay_delivery(&self.account, &delivery.message.id)
-                        .await;
+                    mode.native(
+                        self.adapter
+                            .ack_replay_delivery(&self.account, &delivery.message.id),
+                    )
+                    .await?;
                 } else {
                     crate::diagnostics::event("mdk_delivery", "unpersisted_not_acknowledged");
                 }
-                mdk(self.runtime.sync_transport_groups(None).await)?;
+                mdk(mode
+                    .native(self.runtime.sync_transport_groups(None))
+                    .await?)?;
             }
             Ok(failure @ (Ok(None) | Err(_))) => {
                 self.terminal_authority.retire_all();
@@ -2584,27 +2725,34 @@ impl MdkOwner {
         }
     }
     async fn tick_inner(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         if !self.active {
             return Err(Error::Mdk("inactive"));
         }
         self.terminal_prune_grants();
+        mode.admit()?;
         self.progress_commands()?;
+        mode.admit()?;
         self.progress_streams()?;
+        mode.admit()?;
         self.reconcile_command_sources()?;
+        mode.admit()?;
         self.maintain_journal()?;
+        mode.admit()?;
         self.rebuild_routes()?;
         if !self.recover_transport(deadline).await? {
             self.receive_one(deadline).await?;
             let unchanged = *self.notification_loss.borrow() == self.loss_baseline;
             if self.recovery_subscribed
                 && unchanged
-                && self.network_connected().await
-                && self
-                    .adapter
-                    .account_subscription_eose(&self.account)
-                    .await
+                && mode.native(self.network_connected()).await?
+                && mode
+                    .native(self.adapter.account_subscription_eose(&self.account))
+                    .await?
                     .complete()
             {
+                mode.admit()?;
                 self.publication.resume(self.loss_baseline.clone());
                 self.recovery = false;
                 crate::diagnostics::event("mdk_transport", "recovery_caught_up");
@@ -2613,25 +2761,36 @@ impl MdkOwner {
             }
         }
         self.ensure_ingress()?;
-        tokio::time::timeout_at(deadline, self.runtime.sync_transport_groups(None))
-            .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(|_| Error::Transport("subscription_sync"))?;
+        mode.native(tokio::time::timeout_at(
+            deadline,
+            self.runtime.sync_transport_groups(None),
+        ))
+        .await?
+        .map_err(|_| Error::Timeout)?
+        .map_err(|_| Error::Transport("subscription_sync"))?;
         let updates = self.terminal_authority.stage(None);
-        let effects = tokio::time::timeout_at(deadline, self.runtime.drain())
-            .await
+        let effects = mode
+            .native(tokio::time::timeout_at(deadline, self.runtime.drain()))
+            .await?
             .map_err(|_| Error::Timeout)?;
         self.apply_effects(mdk(effects)?, deadline).await?;
+        mode.admit()?;
         self.terminal_finish(updates);
         self.receive_one(deadline).await?;
+        mode.admit()?;
         self.drive_retained(deadline).await?;
         self.submit_unsubmitted(deadline).await?;
+        mode.admit()?;
         self.submit_command_publications(deadline).await?;
+        mode.admit()?;
         self.submit_stream_publications(deadline).await?;
+        mode.admit()?;
         self.progress_commands()?;
+        mode.admit()?;
         self.progress_streams()?;
+        mode.admit()?;
         self.maintain_journal()?;
-        Ok(())
+        mode.admit()
     }
     pub async fn shutdown(&mut self, deadline: Instant) -> Result<()> {
         self.terminal_authority.retire_all();

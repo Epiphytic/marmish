@@ -273,6 +273,7 @@ impl MdkOwner {
         self.commands.as_ref().and_then(|s| s.lifetime())
     }
     pub(crate) fn command_count_exit_ready(&self) -> Result<bool> {
+        self.active_mode.admit()?;
         if !self
             .commands
             .as_ref()
@@ -280,9 +281,11 @@ impl MdkOwner {
         {
             return Ok(false);
         }
-        Ok(self.streams_idle()?
+        let ready = self.streams_idle()?
             && self.journal.command_sources_all_acknowledged()?
-            && mdk(self.storage.list_pending_application_events())?.is_empty())
+            && mdk(self.storage.list_pending_application_events())?.is_empty();
+        self.active_mode.admit()?;
+        Ok(ready)
     }
     pub(crate) fn command_set_lifetime(
         &mut self,
@@ -297,6 +300,7 @@ impl MdkOwner {
         key: RoomKey,
         deadline: Instant,
     ) -> Result<()> {
+        self.active_mode.admit()?;
         self.reconcile_orphans()?;
         tokio::time::timeout_at(
             deadline,
@@ -356,6 +360,7 @@ impl MdkOwner {
         rooms: &mut RoomIntents,
         at: Instant,
     ) -> Result<LocalResult> {
+        self.active_mode.admit()?;
         if let Some(token) = key.fresh
             && self
                 .journal
@@ -527,6 +532,7 @@ impl MdkOwner {
         profile: &str,
         request: &Request,
     ) -> Result<LocalResult> {
+        self.active_mode.admit()?;
         match request {
             Request::CommandPrepare {
                 remote,
