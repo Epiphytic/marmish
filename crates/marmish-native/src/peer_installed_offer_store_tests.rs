@@ -516,13 +516,10 @@ async fn managed_consent_transaction_refuses_each_exclusive_deadline() {
         let offer = offer(&f, &f.server, A, wall);
         let key = Selector::from(&offer.flight);
         let offer_end = offer.flight.flight().expires_at;
-        let (consent_end, artifact_end, boundary, refusal) = match cutoff {
-            "offer" => (offer_end + 1, offer_end + 2, offer_end, Error::Expired),
-            "consent" => (wall + 120, wall + 240, wall + 120, Error::Package),
-            // A correctly signed Consent can end with its package but cannot
-            // outlive it. The stored artifact cutoff is deliberately shortened
-            // here to exercise its independent check with a valid signed row.
-            _ => (wall + 120, wall + 120, wall + 120, Error::Expired),
+        let (consent_end, boundary, refusal) = match cutoff {
+            "offer" => (offer_end + 1, offer_end, Error::Expired),
+            "consent" => (wall + 120, wall + 120, Error::Package),
+            _ => (wall + 120, wall + 120, Error::Expired),
         };
         let at = wall + 2;
         let signed = codec()
@@ -554,10 +551,25 @@ async fn managed_consent_transaction_refuses_each_exclusive_deadline() {
             &source,
             &stage,
             witness,
-            Artifact::new(consent.binding().event_id, &package, artifact_end),
+            Artifact::new(consent.binding().event_id, &package, offer_end + 600),
             at,
         )
         .unwrap();
+        if cutoff == "artifact" {
+            // Current issuance requires a package valid beyond the Offer.
+            // Shorten only the stored fixture cutoff to exercise its guard
+            // separately. The signed Consent ends at the boundary too.
+            assert_eq!(
+                cp.cursor
+                    .conn
+                    .execute(
+                        "UPDATE peer_provisional_stage_v1 SET package_expires=?1 WHERE state=2",
+                        [i64::try_from(boundary).unwrap()],
+                    )
+                    .unwrap(),
+                1
+            );
+        }
         cp.fixture_assert_managed_consent_boundaries(
             &source,
             &reservation,
