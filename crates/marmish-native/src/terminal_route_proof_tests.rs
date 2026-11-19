@@ -9,6 +9,8 @@ use tokio::time::timeout;
 use transport_nostr_adapter::NostrRelayEvent;
 #[path = "terminal_command_fixture.rs"]
 mod terminal_command_fixture;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use terminal_command_fixture::retained_candidate_rows;
 pub(crate) use terminal_command_fixture::{CommandPeer, open_cli_pty};
 
 struct Lane {

@@ -372,3 +372,6 @@ fn installed_registered_fresh_exec_and_command() {
 
 #[path = "peer_daemon_passive_recipient_wss_tests.rs"]
 mod passive_recipient;
+
+#[path = "peer_daemon_registered_retained_tests.rs"]
+mod retained;

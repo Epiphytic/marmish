@@ -3400,6 +3400,8 @@ pub(crate) mod terminal_relay_fixture;
 #[cfg(test)]
 #[path = "terminal_route_proof_tests.rs"]
 mod terminal_route_proof_tests;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use terminal_route_proof_tests::retained_candidate_rows;
 #[cfg(test)]
 pub(crate) use terminal_route_proof_tests::{CommandPeer, open_cli_pty};
 

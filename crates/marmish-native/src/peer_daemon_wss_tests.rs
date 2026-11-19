@@ -11,6 +11,14 @@ mod postjoin_private_wss;
 #[path = "peer_daemon_registered_qualification_tests.rs"]
 mod registered_qualification;
 
+#[cfg(all(
+    not(marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_daemon_registered_stock_reopen_test.rs"]
+mod registered_stock_reopen;
+
 use super::{
     daemon_peer::{Admission, Bootstrap},
     *,
@@ -860,13 +868,25 @@ async fn ordinary_command_with_inventory(
     cat: &Path,
     expected_count: usize,
 ) {
+    const MESSAGE: &[u8] = b"\x00two words; * % \" \' \\ \xff\r\n";
+    let argv = vec![cat.as_os_str().as_encoded_bytes().to_vec()];
+    ordinary_command_bytes(socket, remote, relay, argv, MESSAGE, Some(expected_count)).await;
+}
+
+async fn ordinary_command_bytes(
+    socket: &Path,
+    remote: PublicKey,
+    relay: &Relay,
+    argv: Vec<Vec<u8>>,
+    payload: &[u8],
+    expected_count: Option<usize>,
+) -> String {
     use crate::{
         command_client::CommandHandle,
         command_local::Cursors,
         command_wire::{self as wire, ResponseResult, Submit},
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
-    const MESSAGE: &[u8] = b"\x00two words; * % \" \' \\ \xff\r\n";
 
     async fn request(socket: &Path, request: &Request) -> LocalResult {
         let result = ipc::command_request(socket, request).await.unwrap();
@@ -959,15 +979,16 @@ async fn ordinary_command_with_inventory(
     };
     let fresh = || crate::foundation::fresh_id(Wall::System.sample().unwrap().as_secs()).unwrap();
     let submit_id = fresh();
+    let invocation = fresh();
     let submit = Request::CommandSubmit {
         remote,
         relays,
         session,
         request_id: submit_id.clone(),
         submit: Submit {
-            invocation: hex::decode(fresh()).unwrap().try_into().unwrap(),
-            argv: vec![cat.as_os_str().as_encoded_bytes().to_vec()],
-            stdin: MESSAGE.to_vec(),
+            invocation: hex::decode(&invocation).unwrap().try_into().unwrap(),
+            argv,
+            stdin: payload.to_vec(),
         },
     };
     let LocalResult::LocalQueued { handle } = request(socket, &submit).await else {
@@ -1029,7 +1050,7 @@ async fn ordinary_command_with_inventory(
         assert!(err.bytes.is_empty());
         assert_eq!(err.next_cursor, 0);
         stdout.extend_from_slice(&out.bytes);
-        assert!(stdout.len() <= MESSAGE.len());
+        assert!(stdout.len() <= payload.len());
         cursors.stdout = out.next_cursor;
         if let Some(outcome) = status
             .outcome
@@ -1037,7 +1058,7 @@ async fn ordinary_command_with_inventory(
         {
             assert!(outcome.kind == wire::OutcomeKind::Code);
             assert_eq!(outcome.value, Some(0));
-            assert_eq!(stdout, MESSAGE);
+            assert_eq!(stdout, payload);
             break;
         }
     }
@@ -1053,13 +1074,18 @@ async fn ordinary_command_with_inventory(
     else {
         panic!("ordinary invocation inventory");
     };
-    assert_eq!(entries.len(), expected_count);
     assert!(next.is_none(), "complete ordinary invocation inventory");
-    let entry = entries
-        .iter()
-        .find(|entry| entry.handle == handle)
-        .expect("exact ordinary invocation in inventory");
-    assert!(entry.authority_valid);
+    if let Some(expected_count) = expected_count {
+        assert_eq!(entries.len(), expected_count);
+    }
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|row| row.handle == handle && row.authority_valid)
+            .count(),
+        1
+    );
+    invocation
 }
 
 async fn verify_ordinary_command(round: &Round, socket: &Path) -> crate::mdk_adapter::MdkOwner {
@@ -1129,4 +1155,15 @@ async fn outage() {
 #[ignore = "requires same-build native bins and two independent private TLS relays"]
 fn peer_daemon_wss_peer_outage_preserves_ordinary_commands() {
     run_native(Duration::from_secs(160), outage);
+}
+
+#[cfg(all(
+    not(marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[test]
+#[ignore = "launched by the private installed retained-results controller"]
+fn registered_stock_reopen_child() {
+    registered_stock_reopen::run();
 }

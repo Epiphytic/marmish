@@ -44,7 +44,7 @@ impl CommandPeer {
     }
 
     async fn open(&self, relay: &Relay, remote: PublicKey, server: bool, cat: &Path) -> MdkOwner {
-        self.open_with_terminal(relay, remote, server, cat, false)
+        self.open_with_engine(relay, remote, server, cat, false, None)
             .await
     }
 
@@ -55,6 +55,22 @@ impl CommandPeer {
         server: bool,
         cat: &Path,
         terminal: bool,
+    ) -> MdkOwner {
+        self.open_with_engine(relay, remote, server, cat, terminal, None)
+            .await
+    }
+
+    async fn open_with_engine(
+        &self,
+        relay: &Relay,
+        remote: PublicKey,
+        server: bool,
+        cat: &Path,
+        terminal: bool,
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))] admission: Option<
+            crate::command_engine::Admission,
+        >,
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))] _admission: Option<()>,
     ) -> MdkOwner {
         let mut owner = MdkOwner::open(
             &self.lease,
@@ -99,18 +115,23 @@ impl CommandPeer {
                     &identity.key_id,
                 )
                 .unwrap();
-            let engine = CommandEngine::start(
-                EngineSettings {
-                    policy,
-                    binding: identity.binding,
-                    master: identity.master,
-                    // The unit-test executable has no installed native layout.
-                    // The real worker is used, with copy-helper registration disabled.
-                    canonical_native_image: None,
-                },
-                owner.journal.command_recovery().unwrap(),
-            )
-            .unwrap();
+            let settings = EngineSettings {
+                policy,
+                binding: identity.binding,
+                master: identity.master,
+                // The unit-test executable has no installed native layout.
+                // The real worker is used, with copy-helper registration disabled.
+                canonical_native_image: None,
+            };
+            let recovery = owner.journal.command_recovery().unwrap();
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            let engine = match admission {
+                Some(admission) => CommandEngine::start_candidate(settings, recovery, admission),
+                None => CommandEngine::start(settings, recovery),
+            };
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            let engine = CommandEngine::start(settings, recovery);
+            let engine = engine.unwrap();
             owner.commands = Some(CommandService::new(config, Some(engine)));
         } else {
             owner
@@ -203,7 +224,12 @@ async fn response(
     }
 }
 
-async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &CommandRoom, cat: &Path) {
+async fn run_command(
+    client: &mut MdkOwner,
+    server: &mut MdkOwner,
+    room: &CommandRoom,
+    cat: &Path,
+) -> Id {
     let deadline = Instant::now() + Duration::from_secs(15);
     let owner = Owner::from_context(
         &client
@@ -294,9 +320,49 @@ async fn run_command(client: &mut MdkOwner, server: &mut MdkOwner, room: &Comman
             );
             assert_eq!(outcome.value, Some(0));
             assert_eq!(result, bytes);
-            break;
+            return invocation;
         }
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) async fn retained_candidate_rows(
+    base: &Path,
+    relay: &Relay,
+    admission: crate::command_engine::Admission,
+) -> (CommandPeer, MdkOwner, [Id; 2]) {
+    let client_peer = CommandPeer::new(base, "client");
+    let server_peer = CommandPeer::new(base, "server");
+    let cat = std::fs::canonicalize("/bin/cat").unwrap();
+    for key in [client_peer.public(), server_peer.public()] {
+        relay.ordinary(key);
+    }
+    let mut client = client_peer
+        .open(relay, server_peer.public(), false, &cat)
+        .await;
+    let mut server = server_peer
+        .open_with_engine(
+            relay,
+            client_peer.public(),
+            true,
+            &cat,
+            false,
+            Some(admission),
+        )
+        .await;
+    let room = client
+        .open_command_room(
+            server_peer.public().to_bytes(),
+            false,
+            Instant::now() + STEP,
+        )
+        .await
+        .unwrap();
+    let first = run_command(&mut client, &mut server, &room, &cat).await;
+    let second = run_command(&mut client, &mut server, &room, &cat).await;
+    assert_ne!(first, second);
+    client_peer.stop_fixture_server(client).await;
+    (server_peer, server, [first, second])
 }
 
 fn snapshot(reader: &Connection) -> (i64, i64) {

@@ -361,3 +361,7 @@ impl RegisteredStop {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "mdk_owner_idle_retained_tests.rs"]
+mod retained;
