@@ -31,3 +31,15 @@ The installed started-engine process, its stock reopen with retained terminal
 results, the full subeffect-cut matrix, and large retained histories remain
 unqualified. This increment did not change the release build, GitHub Actions,
 or the existing registered no-engine acceptance criteria.
+
+## Worker liveness follow-up
+
+Exact source `0429ed1b46ca2b88b61e9806520303b8d428842b` passed a fresh stock
+unit link (42.02 s), stock all-target strict Clippy (28.30 s) and candidate
+all-target strict Clippy (28.73 s) using the flags above. The immutable stock
+binary passed two `idle_cleanup_` engine tests and three
+`registered_idle_prelude` ownership tests. The latter finished in 11.53 s.
+The empty-engine case independently counted its retained rows through the
+Journal and measured 38.07 ms with zero rows. This is one report-only
+sample. This follow-up has no candidate runtime rerun or installed-runtime
+qualification. See the [independent source review](../reviews/peer-candidate-idle-command-stop.md#worker-liveness-follow-up).

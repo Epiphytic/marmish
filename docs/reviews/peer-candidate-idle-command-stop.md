@@ -50,3 +50,13 @@ It also identified proof limits. The cancellation regression cuts before the
 first admitted call, and the zero-row timing fixture prints a literal row
 count. The installed started-engine lifecycle and transition-specific cuts in
 the design still require qualification. See the [validation record](../validation/peer-candidate-idle-command-stop.md).
+
+## Worker liveness follow-up
+
+Claude Code Sonnet 5.5 in Auto mode **approved** source
+`0429ed1b46ca2b88b61e9806520303b8d428842b` in session
+`745df915-328d-4d96-b406-78d1d6dea36f`. The reviewer verified that every
+trusted prelude poll rejects a disconnected engine even before the worker
+thread finishes. The existing Copy GC flag keeps queued and unapplied work
+busy. Review was by source inspection. The separate Linux AMD64 author
+checks ran the affected tests and passed strict stock and candidate Clippy.
