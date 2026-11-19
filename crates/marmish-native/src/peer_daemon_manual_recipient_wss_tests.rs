@@ -5,7 +5,7 @@ use super::{
     },
     *,
 };
-use crate::peer_relay_trust::qualified_both_command_fixture;
+use crate::{peer_invitation::near_cap_fixture, peer_relay_trust::qualified_both_command_fixture};
 use nostr::key::Keys;
 use std::{os::unix::fs::FileExt as _, sync::Arc};
 use tokio::time::timeout_at;
@@ -268,13 +268,14 @@ async fn mounted(measure_near_cap: bool) {
     let near_cap = measure_near_cap.then(|| {
         let cold_identity = material(&mut cold_lease, &daemon);
         assert_eq!(cold_identity.public_key(), signer);
-        let stage = crate::peer_invitation::near_cap_fixture::grow(
-            &cold_lease,
-            &cold_identity,
-            peer.url.as_str(),
-            &exact,
-        )
-        .expect("near-cap SQLCipher fixture prepared from witnessed Pending");
+        let mut wrong = exact;
+        wrong.selection.offer_id[0] ^= 1;
+        assert!(matches!(
+            near_cap_fixture::grow(&cold_lease, &cold_identity, peer.url.as_str(), &wrong),
+            Err("pending_selection")
+        ));
+        let stage = near_cap_fixture::grow(&cold_lease, &cold_identity, peer.url.as_str(), &exact)
+            .expect("near-cap SQLCipher fixture prepared from witnessed Pending");
         println!(
             "manual_near_cap_original {}",
             json!({
