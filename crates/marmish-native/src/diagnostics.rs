@@ -22,6 +22,25 @@ pub fn event(stage: &'static str, category: &'static str) {
     }
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) fn manual_approval_timing(elapsed: std::time::Duration) {
+    if ENABLED.load(Ordering::Relaxed) {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "{}",
+            serde_json::json!({
+                "schema": 1,
+                "event": "manual_approval_timing",
+                "decision_ns": pending_refresh::nanos(elapsed),
+            })
+        );
+    }
+}
+
 pub fn stage(current: &mut &'static str, value: &'static str) {
     *current = value;
     event(value, "begin");

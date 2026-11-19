@@ -245,6 +245,7 @@ impl ManualService<'_, '_, '_> {
         };
 
         self.producer.invalidate();
+        let decision_started = Instant::now();
         let settlement = pending.approve(
             self.lease,
             self.port,
@@ -255,9 +256,14 @@ impl ManualService<'_, '_, '_> {
                 forwarding: Some(self.fence.forwarding),
             },
         );
-        let failure = approval_stop_category(settlement.result());
+        let decision_elapsed = decision_started.elapsed();
+        let result = settlement.result();
+        let failure = approval_stop_category(result);
         self.check_approval_port()?;
         settlement.respond();
+        if matches!(result, Ok(Ok(()))) {
+            crate::diagnostics::manual_approval_timing(decision_elapsed);
+        }
         if let Some(category) = failure {
             crate::diagnostics::event("manual_approval", category);
             return Err(self.local_failure());

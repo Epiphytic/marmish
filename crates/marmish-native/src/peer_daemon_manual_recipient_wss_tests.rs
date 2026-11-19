@@ -108,6 +108,21 @@ fn manual_failure_log(log: &File) -> String {
         .join(", ")
 }
 
+fn approval_timings(log: &File) -> [u64; 2] {
+    let mut bytes = vec![0; 64 * 1024];
+    let size = log.read_at(&mut bytes, 0).unwrap();
+    let readings: Vec<_> = String::from_utf8_lossy(&bytes[..size])
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["event"] == "manual_approval_timing")
+        .map(|value| {
+            assert_eq!(value["schema"], 1);
+            value["decision_ns"].as_u64().expect("decision duration")
+        })
+        .collect();
+    readings.try_into().expect("fresh approval and exact retry")
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ManualCase {
     Pending,
@@ -349,6 +364,11 @@ async fn mounted(case: ManualCase) {
     child.stop().await;
     let stopped = clock.elapsed();
     assert!(!socket.exists());
+    if case == ManualCase::Approve {
+        let [decision, retry] = approval_timings(&recipient_log);
+        println!("manual_approval_native_decision_ns {decision}");
+        println!("manual_approval_native_retry_ns {retry}");
+    }
     let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
     let committed_approval = (case == ManualCase::Approve).then(|| {
         let identity = material(&mut cold_lease, &daemon);
