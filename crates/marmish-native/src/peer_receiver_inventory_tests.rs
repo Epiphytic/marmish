@@ -126,7 +126,10 @@ fn peer_receiver_inventory_recovers_only_exact_witness_and_retains_expired_slot(
     drop(staged);
 }
 
-fn start_original(f: &Fixture, length: u64) -> (RecoveredOwner<'_>, Binding, FileWitness) {
+pub(super) fn start_original(
+    f: &Fixture,
+    length: u64,
+) -> (RecoveredOwner<'_>, Binding, FileWitness) {
     let routing = NostrRoutingV1::new([3; 32], vec![RELAY.to_owned()]).unwrap();
     let prepared = wire::Codec::for_version(
         wire::MAX_OUTER_BYTES,

@@ -293,7 +293,7 @@ fn manual_due_uses_canonical_offer_coordinates_without_updating_floors() {
         assert_eq!(cp.receiver_charges(&source, wall + 1).unwrap()[1], None);
         assert_eq!(floors(&cp), before);
     }
-    cp.reserve_provisioning(&source, exact, wall + 1).unwrap();
+    let reservation = cp.reserve_provisioning(&source, exact, wall + 1).unwrap();
     let charge = cp.receiver_charges(&source, wall + 1).unwrap()[1].unwrap();
     let occupied = floors(&cp);
     assert_eq!(
@@ -318,4 +318,52 @@ fn manual_due_uses_canonical_offer_coordinates_without_updating_floors() {
         Some(Error::Expired)
     );
     assert_eq!(floors(&cp), occupied);
+
+    let refuse = |deadline| {
+        assert_eq!(deadline, exclusive);
+        Err(Error::Source)
+    };
+    assert_eq!(
+        cp.bind_stage_fenced(&source, &reservation, wall + 2, Some(refuse))
+            .err(),
+        Some(Error::Source)
+    );
+    assert_eq!(floors(&cp), occupied);
+    assert!(!cp.has_stage(&source, &reservation, wall + 2).unwrap());
+    let stage = cp.bind_stage(&source, &reservation, wall + 2).unwrap();
+    let bound = floors(&cp);
+    let witness = stage_journal::FileWitness {
+        device: [0; 8],
+        inode: [1; 8],
+    };
+    assert_eq!(
+        cp.start_stage_fenced(&source, &stage, witness, wall + 3, Some(refuse))
+            .err(),
+        Some(Error::Source)
+    );
+    assert_eq!(floors(&cp), bound);
+    cp.start_stage(&source, &stage, witness, wall + 3).unwrap();
+    let started = floors(&cp);
+    let artifact = stage_journal::Artifact::new([4; 32], b"test", exclusive + 600);
+    assert_eq!(
+        cp.record_prepared_fenced(&source, &stage, witness, artifact, wall + 4, Some(refuse)),
+        Err(Error::Source)
+    );
+    assert_eq!(floors(&cp), started);
+    assert_eq!(
+        cp.receiver_charges(&source, wall + 4).unwrap()[1]
+            .unwrap()
+            .stage,
+        Some(stage_journal::State::NativeStarted(witness))
+    );
+
+    #[cfg(marmish_peer_receiver_candidate)]
+    {
+        assert_eq!(
+            cp.reserve_manual_package(&source, exact, exclusive, false, || panic!("expired"))
+                .err(),
+            Some(Error::Expired)
+        );
+        assert_eq!(floors(&cp), started);
+    }
 }

@@ -48,30 +48,7 @@ impl RecoveredOwner<'_> {
         let selected = self
             .checkpoint
             .select_manual_due(&self.source, route, charge)?;
-        Ok(match (class, selected) {
-            (Class::Vacant, work @ Some(ManualDue::Provision(_))) => work,
-            (Class::Create(_) | Class::Identified { .. }, work @ Some(ManualDue::Resume(_))) => {
-                work
-            }
-            (
-                Class::Identified { .. },
-                work @ Some(
-                    ManualDue::Publish(_) | ManualDue::Held(..) | ManualDue::JoinStarted(..),
-                ),
-            ) => work,
-            (Class::JournalCandidate { .. }, work @ Some(ManualDue::Resume(_)))
-                if matches!(
-                    charge,
-                    Some(Charge {
-                        stage: Some(State::NativeStarted(_)),
-                        ..
-                    })
-                ) =>
-            {
-                work
-            }
-            _ => None,
-        })
+        Ok(physical_work(class, charge, selected))
     }
 
     fn read_manual_work<T>(
@@ -93,6 +70,44 @@ impl RecoveredOwner<'_> {
         })??;
         port.use_current_recipient(|_, _, _| ())?;
         Ok(selected)
+    }
+}
+
+fn physical_work(
+    class: Class,
+    charge: Option<Charge>,
+    selected: Option<ManualDue>,
+) -> Option<ManualDue> {
+    match (class, selected) {
+        (Class::Vacant, work @ Some(ManualDue::Provision(_))) => work,
+        (Class::Create(_) | Class::Identified { .. }, work @ Some(ManualDue::Resume(_))) => work,
+        (
+            Class::Identified { .. },
+            work @ Some(ManualDue::Publish(_) | ManualDue::Held(..) | ManualDue::JoinStarted(..)),
+        ) => work,
+        (Class::JournalCandidate { binding, .. }, Some(work)) => match (charge, work) {
+            (
+                Some(Charge {
+                    binding: charged,
+                    stage: Some(State::NativeStarted(_)),
+                }),
+                ManualDue::Resume(key),
+            ) if binding == charged && binding.coordinates().3 == key => Some(work),
+            (
+                Some(Charge {
+                    binding: charged,
+                    stage: Some(State::Prepared(..)),
+                }),
+                ManualDue::JoinStarted(key, generation),
+            ) if binding == charged
+                && binding.coordinates().3 == key
+                && binding.coordinates().1 == generation =>
+            {
+                Some(work)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -138,6 +153,7 @@ impl RecoveredOwner<'_> {
                         .map(drop)
                         .map_err(|_| consent_checkpoint::Error::Source)
                 })?;
+        let window = self.manual_package_window(port, selector, &guard)?;
         let artifact = if let Some(started) = self.start_package(quota, &reservation, &window)? {
             let prestaged = self.prestage_package(quota, &reservation, started)?;
             Some(self.issue_package(quota, &reservation, prestaged)?)
@@ -176,4 +192,48 @@ impl RecoveredOwner<'_> {
                 .map_err(|_| Error::Binding)
         })?
     }
+}
+
+#[cfg(test)]
+#[test]
+fn cold_join_started_journal_only_selects_exact_readback() {
+    use super::super::provisional::tests::Fixture;
+    use super::tests::start_original;
+    use consent_checkpoint::provisioning::stage_journal::Artifact;
+
+    let fixture = Fixture::new();
+    let (_owner, binding, witness) = start_original(&fixture, 4096);
+    let (_, generation, _, selector) = binding.coordinates();
+    let stage = State::Prepared(witness, Artifact::new([3; 32], b"test", fixture.now + 3600));
+    let main = FileExtent {
+        identity: (
+            u64::from_be_bytes(witness.device),
+            u64::from_be_bytes(witness.inode),
+        ),
+        logical: 4096,
+        charged: 4096,
+    };
+    let journal = FileExtent {
+        identity: (0, 1),
+        ..main
+    };
+    let charge = Some(Charge {
+        binding,
+        stage: Some(stage),
+    });
+    let class = super::classify_unknown(charge, [Some(main), Some(journal), None, None]);
+    assert!(matches!(class, Class::JournalCandidate { .. }));
+
+    let exact = ManualDue::JoinStarted(selector, generation);
+    assert_eq!(physical_work(class, charge, Some(exact)), Some(exact));
+    for ineligible in [
+        ManualDue::JoinStarted(selector, generation + 1),
+        ManualDue::Held(selector, generation),
+        ManualDue::Publish(selector),
+        ManualDue::Resume(selector),
+        ManualDue::Provision(selector),
+    ] {
+        assert_eq!(physical_work(class, charge, Some(ineligible)), None);
+    }
+    assert_eq!(physical_work(class, None, Some(exact)), None);
 }

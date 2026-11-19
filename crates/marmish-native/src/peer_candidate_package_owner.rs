@@ -156,6 +156,13 @@ impl<'lease> RecoveredOwner<'lease> {
             .ok_or(Error::Binding)
     }
 
+    fn stage_commit(fence: &NativeFence<'_>, expires_at: u64) -> consent_checkpoint::Result<()> {
+        fence
+            .require_offer_limit(expires_at)
+            .and_then(|()| fence.wall().map(drop))
+            .map_err(|_| consent_checkpoint::Error::Expired)
+    }
+
     fn package_scope(
         &mut self,
         quota: &ReceiverQuota<'_>,
@@ -172,9 +179,12 @@ impl<'lease> RecoveredOwner<'lease> {
         {
             return Err(Error::Binding);
         }
-        let stage = self
-            .checkpoint
-            .bind_stage(&self.source, reservation, fence.wall()?)?;
+        let stage = self.checkpoint.bind_stage_fenced(
+            &self.source,
+            reservation,
+            fence.wall()?,
+            Some(|expires| Self::stage_commit(&fence, expires)),
+        )?;
         fence.require_offer_limit(stage.offer_expires())?;
         Ok(stage)
     }
@@ -217,9 +227,13 @@ impl<'lease> RecoveredOwner<'lease> {
                 inode: inode.to_be_bytes(),
             }
         };
-        let native =
-            self.checkpoint
-                .start_stage(&self.source, &stage, file, window.sample()?.as_secs())?;
+        let native = self.checkpoint.start_stage_fenced(
+            &self.source,
+            &stage,
+            file,
+            window.sample()?.as_secs(),
+            Some(|expires| Self::stage_commit(&NativeFence::Candidate(window), expires)),
+        )?;
         window.sample()?;
         Ok(Some(StartedPackage {
             native,
@@ -342,12 +356,13 @@ impl<'lease> RecoveredOwner<'lease> {
         {
             return Err(Error::Binding);
         }
-        self.checkpoint.record_prepared(
+        self.checkpoint.record_prepared_fenced(
             &self.source,
             &stage,
             file,
             artifact,
             window.sample()?.as_secs(),
+            Some(|expires| Self::stage_commit(&fence(), expires)),
         )?;
         let target = self.checkpoint.issued_package_target(
             &self.source,

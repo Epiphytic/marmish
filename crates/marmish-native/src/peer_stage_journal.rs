@@ -172,16 +172,28 @@ impl Checkpoint {
         Ok(load(&tx, reservation.binding)?.is_some())
     }
 
+    #[cfg(test)]
     pub(crate) fn bind_stage(
         &mut self,
         source: &Source,
         reservation: &Reservation,
         wall: u64,
     ) -> Result<BoundStage> {
+        self.bind_stage_fenced(source, reservation, wall, None::<fn(u64) -> Result<()>>)
+    }
+
+    pub(crate) fn bind_stage_fenced(
+        &mut self,
+        source: &Source,
+        reservation: &Reservation,
+        wall: u64,
+        before_commit: Option<impl FnOnce(u64) -> Result<()>>,
+    ) -> Result<BoundStage> {
         self.check_local_owner(&reservation.owner)?;
         let binding = reservation.binding;
         let owner = self.owner.clone();
-        let (tx, offer_expires) = self.stage_transaction(source, binding, wall)?;
+        let (tx, offer_expires) =
+            self.stage_transaction_with_expiry(source, binding, wall, before_commit.is_none())?;
         let state = match load(&tx, binding)? {
             Some(state) => state,
             None => {
@@ -202,6 +214,9 @@ impl Checkpoint {
             }
         };
         rows::advance_wall(&tx, wall)?;
+        if let Some(check) = before_commit {
+            check(offer_expires)?;
+        }
         tx.commit()?;
         Ok(BoundStage {
             owner,
@@ -211,6 +226,7 @@ impl Checkpoint {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn start_stage(
         &mut self,
         source: &Source,
@@ -218,10 +234,22 @@ impl Checkpoint {
         witness: FileWitness,
         wall: u64,
     ) -> Result<NativeStart> {
+        self.start_stage_fenced(source, stage, witness, wall, None::<fn(u64) -> Result<()>>)
+    }
+
+    pub(crate) fn start_stage_fenced(
+        &mut self,
+        source: &Source,
+        stage: &BoundStage,
+        witness: FileWitness,
+        wall: u64,
+        before_commit: Option<impl FnOnce(u64) -> Result<()>>,
+    ) -> Result<NativeStart> {
         self.check_local_owner(&stage.owner)?;
         let binding = stage.binding;
         let owner = self.owner.clone();
-        let (tx, _) = self.stage_transaction(source, binding, wall)?;
+        let (tx, offer_expires) =
+            self.stage_transaction_with_expiry(source, binding, wall, before_commit.is_none())?;
         if load(&tx, binding)? != Some(State::Bound) {
             return Err(Error::Bound);
         }
@@ -230,6 +258,9 @@ impl Checkpoint {
             params![binding.generation.known, witness.device, witness.inode],
         )?;
         rows::advance_wall(&tx, wall)?;
+        if let Some(check) = before_commit {
+            check(offer_expires)?;
+        }
         tx.commit()?;
         Ok(NativeStart {
             owner,
@@ -238,6 +269,7 @@ impl Checkpoint {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn record_prepared(
         &mut self,
         source: &Source,
@@ -246,9 +278,29 @@ impl Checkpoint {
         artifact: Artifact,
         wall: u64,
     ) -> Result<()> {
+        self.record_prepared_fenced(
+            source,
+            stage,
+            witness,
+            artifact,
+            wall,
+            None::<fn(u64) -> Result<()>>,
+        )
+    }
+
+    pub(crate) fn record_prepared_fenced(
+        &mut self,
+        source: &Source,
+        stage: &BoundStage,
+        witness: FileWitness,
+        artifact: Artifact,
+        wall: u64,
+        before_commit: Option<impl FnOnce(u64) -> Result<()>>,
+    ) -> Result<()> {
         self.check_local_owner(&stage.owner)?;
         let binding = stage.binding;
-        let (tx, offer_expires) = self.stage_transaction(source, binding, wall)?;
+        let (tx, offer_expires) =
+            self.stage_transaction_with_expiry(source, binding, wall, before_commit.is_none())?;
         if artifact.expires <= wall
             || offer_expires.checked_add(600).ok_or(Error::Package)? > artifact.expires
         {
@@ -271,10 +323,14 @@ impl Checkpoint {
             _ => return Err(Error::Bound),
         }
         rows::advance_wall(&tx, wall)?;
+        if let Some(check) = before_commit {
+            check(offer_expires)?;
+        }
         tx.commit()?;
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn stage_transaction(
         &mut self,
         source: &Source,
