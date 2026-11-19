@@ -22,6 +22,7 @@ use crate::{
             wire::RECORD_LIMIT,
         },
         store::{
+            Origin,
             consent_checkpoint::{
                 Disposition, provisioning::prepared_consent::custody::delivery_ingress::Observation,
             },
@@ -44,7 +45,11 @@ pub(in crate::peer_invitation) struct Ingress {
 
 enum Recovery {
     Active(Cursor),
-    Complete,
+    Complete {
+        _origin: Origin,
+        _anchor: u64,
+        _revision: u64,
+    },
     Failed,
 }
 
@@ -170,7 +175,14 @@ impl Ingress {
         let next = self.commit_page(owner, port, &cursor, &page)?;
         self.check(owner, port)?;
         let complete = next.is_none();
-        self.recovery = next.map_or(Recovery::Complete, Recovery::Active);
+        self.recovery = match next {
+            Some(next) => Recovery::Active(next),
+            None => Recovery::Complete {
+                _origin: cursor.origin,
+                _anchor: cursor.anchor,
+                _revision: cursor.revision.checked_add(1).ok_or(Error::Binding)?,
+            },
+        };
         Ok(complete)
     }
 
@@ -185,12 +197,17 @@ impl Ingress {
             return Err(Error::Binding);
         }
         self.check(owner, port)?;
-        let deadline = self
-            .guard
-            .before_io(port, deadline.min(Instant::now() + LIVE_WAIT))?;
-        let result = port.wait_live(deadline).await;
+        let live = match port.take_buffered_live()? {
+            Some(buffered) => Some(buffered),
+            None => {
+                let deadline = self
+                    .guard
+                    .before_io(port, deadline.min(Instant::now() + LIVE_WAIT))?;
+                port.wait_live(deadline).await?
+            }
+        };
         self.check(owner, port)?;
-        let outcome = result?
+        let outcome = live
             .as_ref()
             .map(|live| self.ingest(owner, port, Input::Live(live)))
             .transpose()?;
