@@ -34,3 +34,21 @@ This increment validates the test-only schema and stored-state predicates.
 It leaves the installed v2 custody path in use. The mounted writer and
 an authenticated installed Pending → Activating reopen require the later
 decision phase.
+
+## Composition with the near-cap fixture
+
+The composed source at `0cb418674ca9537c5bc140627dee55ccffb50217` retains
+the exact v2 near-cap fixture helper in the shared schema file. Stock
+Clippy and private Linux AMD64 candidate Clippy passed for all targets with
+`-D warnings` in 31.83 s and 32.68 s. The locked offline stock libtest
+passed the same three filters with 3, 9, and 5 tests respectively. The
+private WSS test remained opt-in.
+
+The locked candidate libtest
+`360991b41a8b18aaecb4dee89893e6f9f0f84c92871065b361fc05489da60bd5`
+passed all three approval schema tests in 3.26 s. The same executable
+passed the isolated offline near-cap test of a genuine joined stage in
+49.05 s. This test preserved the selected stage geometry from the separate
+[installed refresh evidence](peer-candidate-near-cap-fixture.md).
+The rebase over the published refresh report preserved the tested crate,
+Cargo, and CI files byte-for-byte.
