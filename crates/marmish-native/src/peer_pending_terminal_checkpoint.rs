@@ -90,7 +90,7 @@ impl TerminalRecord {
 
 impl Context {
     pub(super) fn verify_local_terminal(&self, tx: &Transaction<'_>, wall: u64) -> Result<()> {
-        if self.epoch.is_installed_v2() {
+        if self.epoch.is_installed_family() {
             return Err(Error::Layout);
         }
         self.epoch.verify(tx, self.account, &self.origins)?;

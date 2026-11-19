@@ -28,6 +28,23 @@ WHEN NEW.state>2
 BEGIN SELECT RAISE(ABORT,'installed custody ends at Pending'); END;
 ";
 
+#[cfg(test)]
+const APPROVAL_LAYOUT: &str = "
+CREATE TABLE peer_installed_custody_approval_v3 (
+    version INTEGER PRIMARY KEY CHECK (version=3)
+) STRICT;
+INSERT INTO peer_installed_custody_approval_v3 VALUES (3);
+CREATE TRIGGER peer_installed_custody_insert BEFORE INSERT ON peer_installed_custody_approval_v3
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_update BEFORE UPDATE ON peer_installed_custody_approval_v3
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_delete BEFORE DELETE ON peer_installed_custody_approval_v3
+BEGIN SELECT RAISE(ABORT,'immutable installed custody version'); END;
+CREATE TRIGGER peer_installed_custody_manual_approval BEFORE UPDATE ON peer_pending_custody
+WHEN NEW.state=3 AND (OLD.class IS NOT 1 OR OLD.mode IS NOT 0 OR NEW.approval IS NOT 0)
+BEGIN SELECT RAISE(ABORT,'installed custody requires Manual approval'); END;
+";
+
 const DDL: &str = "
 CREATE TABLE peer_pending_custody_epoch (
     epoch INTEGER PRIMARY KEY CHECK (epoch=3)
@@ -212,10 +229,14 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     #[cfg(test)]
     static LEAVE_EFFECT: OnceLock<Vec<Entry>> = OnceLock::new();
     static INSTALLED_V2: OnceLock<Vec<Entry>> = OnceLock::new();
+    #[cfg(test)]
+    static APPROVAL_V3: OnceLock<Vec<Entry>> = OnceLock::new();
     static CUSTODY: OnceLock<Vec<Entry>> = OnceLock::new();
     let expected = match kind {
         Kind::Custody => &CUSTODY,
-        Kind::InstalledV2 => &INSTALLED_V2,
+        Kind::Installed(InstalledKind::V2) => &INSTALLED_V2,
+        #[cfg(test)]
+        Kind::Installed(InstalledKind::ApprovalV3) => &APPROVAL_V3,
         #[cfg(test)]
         Kind::Publication => &PUBLICATION,
         #[cfg(test)]
@@ -228,9 +249,9 @@ fn expected(kind: Kind) -> std::result::Result<&'static [Entry], CursorError> {
     }
     let template = super::schema::template()?;
     install(&template)?;
-    if Epoch(kind).is_installed_v2() {
+    if let Kind::Installed(installed_kind) = kind {
         installed::install(&template)?;
-        template.execute_batch(INSTALLED_LAYOUT)?;
+        template.execute_batch(installed_kind.ddl())?;
     }
     #[cfg(test)]
     if Epoch(kind).has_publication_inventory() {
@@ -254,7 +275,7 @@ pub(crate) struct Epoch(Kind);
 #[derive(Clone, Copy)]
 enum Kind {
     Custody,
-    InstalledV2,
+    Installed(InstalledKind),
     #[cfg(test)]
     Publication,
     #[cfg(test)]
@@ -263,9 +284,39 @@ enum Kind {
     LeaveEffect,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum InstalledKind {
+    V2,
+    #[cfg(test)]
+    ApprovalV3,
+}
+
+impl InstalledKind {
+    pub(super) fn ddl(self) -> &'static str {
+        match self {
+            Self::V2 => INSTALLED_LAYOUT,
+            #[cfg(test)]
+            Self::ApprovalV3 => APPROVAL_LAYOUT,
+        }
+    }
+
+    fn other_marker(self) -> &'static str {
+        match self {
+            Self::V2 => "peer_installed_custody_approval_v3",
+            #[cfg(test)]
+            Self::ApprovalV3 => "peer_installed_custody_v2",
+        }
+    }
+}
+
 impl Epoch {
     pub(crate) fn is_installed_v2(self) -> bool {
-        matches!(self.0, Kind::InstalledV2)
+        matches!(self.0, Kind::Installed(InstalledKind::V2))
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_installed_family(self) -> bool {
+        matches!(self.0, Kind::Installed(_))
     }
 
     #[cfg(test)]
@@ -336,6 +387,15 @@ impl Epoch {
             }
         }
         #[cfg(test)]
+        if matches!(self.0, Kind::Installed(InstalledKind::ApprovalV3)) {
+            let [origin] = origins else {
+                return Err(CursorError::Binding);
+            };
+            let signer = PublicKey::from_slice(&account).map_err(|_| CursorError::Binding)?;
+            installed::verify_rows(tx, signer, *origin)?;
+            verify_approval_rows(tx)?;
+        }
+        #[cfg(test)]
         if self.has_publication_inventory() {
             super::activation_schema::verify_rows(tx, account)
                 .map_err(super::schema::cursor_error)?;
@@ -368,7 +428,7 @@ pub(crate) fn fixture_pending_stage(
     origin: Origin,
     (key, generation, held_at, deadline): (Selector, u64, u64, u64),
 ) -> Result<(Binding, FileWitness)> {
-    Epoch(Kind::InstalledV2).verify(tx, account.to_bytes(), &[origin])?;
+    Epoch(Kind::Installed(InstalledKind::V2)).verify(tx, account.to_bytes(), &[origin])?;
     let exact: bool = tx.query_row(
         "SELECT (SELECT count(*) FROM peer_pending_custody)=1
            AND (SELECT count(*) FROM peer_provisional_stage_v1)=1
@@ -409,6 +469,31 @@ pub(crate) fn fixture_pending_stage(
     }
 }
 
+#[cfg(test)]
+pub(super) fn verify_approval_rows(tx: &Connection) -> std::result::Result<(), CursorError> {
+    let valid: bool = tx.query_row(
+        "SELECT (SELECT count(*) FROM peer_installed_custody_approval_v3 WHERE version=3)=1
+            AND NOT EXISTS (SELECT 1 FROM peer_pending_terminal)
+            AND NOT EXISTS (
+                SELECT 1 FROM peer_pending_custody WHERE state=3
+                    AND (class IS NOT 1 OR mode IS NOT 0 OR approval IS NOT 0
+                        OR length(group_id) IS NULL OR length(group_id) NOT BETWEEN 1 AND 255
+                        OR epoch_number IS NULL OR epoch_number<0
+                        OR length(epoch_identity) IS NOT 32 OR own_leaf IS NULL
+                        OR own_leaf NOT BETWEEN 0 AND 4294967295
+                        OR qualified_at IS NULL OR pending_deadline IS NULL
+                        OR activating_at IS NULL OR activating_at<qualified_at
+                        OR activating_at>=pending_deadline)
+            )",
+        [],
+        |row| row.get(0),
+    )?;
+    if !valid {
+        return Err(CursorError::Binding);
+    }
+    Ok(())
+}
+
 fn verify_hardening(conn: &Connection) -> std::result::Result<(), CursorError> {
     check_hardening(conn)?;
     let enforcing: i64 = conn.query_row("PRAGMA ignore_check_constraints", [], |row| row.get(0))?;
@@ -445,12 +530,21 @@ pub(super) fn open_installed(
     signer: &Keys,
     route: &super::super::super::super::Route,
     codec: &wire::Codec,
-) -> std::result::Result<(CursorStore, Epoch), CursorError> {
+    kind: InstalledKind,
+) -> Result<(CursorStore, Epoch)> {
     let account = signer.public_key();
     let origins = vec![route.id];
     verify_hardening(&conn)?;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let epoch = Epoch(Kind::InstalledV2);
+    let other_present: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE lower(name)=?1)",
+        [kind.other_marker()],
+        |row| row.get(0),
+    )?;
+    if other_present {
+        return Err(Error::Layout);
+    }
+    let epoch = Epoch(Kind::Installed(kind));
     if inventory(&tx).map_err(super::schema::cursor_error)? != expected(epoch.0)? {
         installed::verify(&tx, account, route.id)?;
         installed::verify_recovered_parents(&tx, codec, signer, route)?;
@@ -462,12 +556,12 @@ pub(super) fn open_installed(
             |row| row.get(0),
         )?;
         if used {
-            return Err(CursorError::Binding);
+            return Err(CursorError::Binding.into());
         }
         stage_schema::attach(&tx, true)?;
         super::schema::install(&tx)?;
         install(&tx)?;
-        tx.execute_batch(INSTALLED_LAYOUT)?;
+        tx.execute_batch(kind.ddl())?;
     }
     epoch.verify(&tx, account.to_bytes(), &origins)?;
     installed::verify_recovered_parents(&tx, codec, signer, route)?;

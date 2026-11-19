@@ -811,10 +811,30 @@ impl Checkpoint {
         policy: Policy,
         receive: ReceivePolicy,
     ) -> Result<Self> {
+        Self::attach_installed_epoch(
+            conn,
+            signer,
+            uid,
+            url,
+            policy,
+            receive,
+            custody_schema::InstalledKind::V2,
+        )
+    }
+
+    fn attach_installed_epoch(
+        conn: HardenedPeerConnection,
+        signer: Keys,
+        uid: u32,
+        url: &str,
+        policy: Policy,
+        receive: ReceivePolicy,
+        kind: custody_schema::InstalledKind,
+    ) -> Result<Self> {
         let route = super::super::super::Route::configured(url)?;
         let codec = wire::Codec::for_version(wire::MAX_OUTER_BYTES, ControlVersion::V2)
             .map_err(|_| CursorError::Range)?;
-        let (cursor, epoch) = custody_schema::open_installed(conn, &signer, &route, &codec)?;
+        let (cursor, epoch) = custody_schema::open_installed(conn, &signer, &route, &codec, kind)?;
         let mut checkpoint = Self::attach_with(cursor, signer, uid, &[url], policy, |_, _| Ok(()))?;
         checkpoint.codec = codec;
         checkpoint.layout = Layout::InstalledCustodyV2;

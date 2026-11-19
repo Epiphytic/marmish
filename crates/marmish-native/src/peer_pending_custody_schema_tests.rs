@@ -299,6 +299,16 @@ fn held_insert_for(
     carrier: [u8; 32],
     delivery: [u8; 32],
 ) -> rusqlite::Result<usize> {
+    held_insert_with_mode(tx, consent_revision, carrier, delivery, 0)
+}
+
+fn held_insert_with_mode(
+    tx: &Transaction<'_>,
+    consent_revision: [u8; 32],
+    carrier: [u8; 32],
+    delivery: [u8; 32],
+    mode: u8,
+) -> rusqlite::Result<usize> {
     tx.execute(
         "INSERT INTO peer_pending_custody
          (class,generation,account,server,offer_id,offer_revision,origin,consent_carrier,
@@ -308,8 +318,8 @@ fn held_insert_for(
          SELECT class,generation,account,server,offer_id,offer_revision,origin,carrier,
           ?1,?2,?3,?3,?3+3600,CAST('schema fixture bytes' AS BLOB),?3+7200,
           zeroblob(32),zeroblob(32),package_id,package_digest,package_ref,package_slot,
-          ?3-600,package_expires,0,?3,?3+3300,0 FROM peer_prepared_consent_outbox WHERE carrier=?4",
-        params![consent_revision, delivery, seconds(WALL).unwrap(), carrier],
+          ?3-600,package_expires,?5,?3,?3+3300,0 FROM peer_prepared_consent_outbox WHERE carrier=?4",
+        params![consent_revision, delivery, seconds(WALL).unwrap(), carrier, mode],
     )
 }
 
@@ -696,11 +706,21 @@ pub(super) fn mark_pending(
     carrier: [u8; 32],
     delivery: [u8; 32],
 ) {
+    mark_pending_with_mode(cp, source, carrier, delivery, 0);
+}
+
+fn mark_pending_with_mode(
+    cp: &mut Checkpoint,
+    source: &Source,
+    carrier: [u8; 32],
+    delivery: [u8; 32],
+    mode: u8,
+) {
     let tx = cp.cursor.with_wall(source.origin, WALL + 2).unwrap();
     let insert = custody_schema::Writer::Insert;
     insert.guard(&tx, false).unwrap();
     assert_eq!(
-        held_insert_for(&tx, [0x64; 32], carrier, delivery).unwrap(),
+        held_insert_with_mode(&tx, [0x64; 32], carrier, delivery, mode).unwrap(),
         1
     );
     insert.guard(&tx, true).unwrap();
@@ -1107,4 +1127,175 @@ fn pending_terminal_full_cooldown_refuses_decline_but_not_expiry() {
         })
         .unwrap();
     assert_eq!(cooldown_rows, cooldown::HISTORY_LIMIT);
+}
+
+fn open_installed(f: &Fixture, kind: custody_schema::InstalledKind) -> Result<Checkpoint> {
+    Checkpoint::attach_installed_epoch(
+        f.open(),
+        f.client.clone(),
+        UID,
+        URL,
+        Policy::default(),
+        ReceivePolicy::Manual,
+        kind,
+    )
+}
+
+fn attach_installed_parent(f: &Fixture) {
+    Checkpoint::attach_installed_v2(f.open(), f.client.clone(), UID, URL, Policy::default())
+        .unwrap();
+}
+
+#[test]
+fn installed_approval_epochs_are_exclusive_and_preserve_the_v2_inventory() {
+    use custody_schema::InstalledKind::{ApprovalV3, V2};
+
+    for (exact, other, marker) in [
+        (V2, ApprovalV3, "peer_installed_custody_v2"),
+        (ApprovalV3, V2, "peer_installed_custody_approval_v3"),
+    ] {
+        let f = Fixture::new();
+        attach_installed_parent(&f);
+        let mut checkpoint = open_installed(&f, exact).unwrap();
+        let source = checkpoint.bind_source(URL).unwrap();
+        assert_eq!(checkpoint.sweep(&source, WALL).err(), Some(Error::Layout));
+        let context = checkpoint.custody_context(&source).unwrap();
+        let tx = checkpoint.cursor.begin(source.origin).unwrap();
+        assert_eq!(
+            context.verify_local_terminal(&tx, WALL).err(),
+            Some(Error::Layout)
+        );
+        drop(tx);
+        drop(checkpoint);
+
+        let before = f.inventory();
+        let HardenedPeerConnection(conn) = f.open();
+        assert!(
+            conn.execute(&format!("UPDATE {marker} SET version=version"), [])
+                .is_err()
+        );
+        drop(conn);
+        assert_eq!(open_installed(&f, other).err(), Some(Error::Layout));
+        assert_eq!(f.inventory(), before);
+        drop(open_installed(&f, exact).unwrap());
+        assert_eq!(f.inventory(), before);
+
+        let HardenedPeerConnection(conn) = f.open();
+        conn.execute_batch("CREATE TABLE unrelated (value BLOB) STRICT")
+            .unwrap();
+        drop(conn);
+        let drifted = f.inventory();
+        assert!(open_installed(&f, exact).is_err());
+        assert_eq!(f.inventory(), drifted);
+    }
+}
+
+#[test]
+fn installed_approval_epoch_refuses_partial_mixed_and_fixture_inventories() {
+    use custody_schema::InstalledKind::{ApprovalV3, V2};
+
+    for ddl in [
+        "CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+        "CREATE TABLE peer_installed_custody_v2 (version INTEGER PRIMARY KEY) STRICT;
+         CREATE TABLE peer_installed_custody_approval_v3 (version INTEGER PRIMARY KEY) STRICT",
+    ] {
+        let f = Fixture::new();
+        attach_installed_parent(&f);
+        let HardenedPeerConnection(conn) = f.open();
+        conn.execute_batch(ddl).unwrap();
+        drop(conn);
+        let before = f.inventory();
+        assert!(open_installed(&f, V2).is_err());
+        assert!(open_installed(&f, ApprovalV3).is_err());
+        assert_eq!(f.inventory(), before);
+    }
+
+    let f = Fixture::new();
+    f.provisional();
+    drop(f.prepared().unwrap());
+    drop(f.custody().unwrap());
+    let before = f.inventory();
+    assert!(open_installed(&f, ApprovalV3).is_err());
+    assert_eq!(f.inventory(), before);
+}
+
+#[test]
+fn installed_approval_trigger_fences_manual_state_and_both_wall_rollbacks() {
+    use custody_schema::InstalledKind::{ApprovalV3, V2};
+
+    const APPROVE: &str = "UPDATE peer_pending_custody SET state=3,approval=?1,activating_at=?2";
+
+    // Exercise the exact installed overlays with existing schema-level Pending
+    // rows. These are SQL-shaped fixtures, without native or actor authority.
+    for (kind, mode, permitted) in [
+        (V2, 0, false),
+        (ApprovalV3, 1, false),
+        (ApprovalV3, 0, true),
+    ] {
+        let f = Fixture::new();
+        f.provisional();
+        drop(f.prepared().unwrap());
+        let mut cp = f.custody().unwrap();
+        let source = cp.bind_source(URL).unwrap();
+        seed_pending(&mut cp, &source, &f.client, &Keys::generate(), [0x83; 32]);
+        mark_pending_with_mode(&mut cp, &source, [0x83; 32], [0x56; 32], mode);
+        cp.cursor.conn.execute_batch(kind.ddl()).unwrap();
+        let HardenedPeerConnection(outside) = f.open();
+        let stored = || {
+            outside
+                .query_row(
+                    "SELECT state, approval, activating_at, pending_deadline,
+                        (SELECT wall FROM peer_cursor_origin),
+                        (SELECT wall FROM peer_consent_version) FROM peer_pending_custody",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, u8>(0)?,
+                            row.get::<_, Option<u8>>(1)?,
+                            row.get::<_, Option<u64>>(2)?,
+                            row.get::<_, u64>(3)?,
+                            row.get::<_, u64>(4)?,
+                            row.get::<_, u64>(5)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        };
+        let before = stored();
+        assert_eq!(before.0, 2);
+        assert!(outside.execute(APPROVE, (0, WALL + 3)).is_err());
+
+        let writer = custody_schema::Writer::Update;
+        let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
+        writer.guard(&tx, false).unwrap();
+        assert!(tx.execute(APPROVE, (1, WALL + 3)).is_err());
+        assert!(tx.execute(APPROVE, (0, before.3)).is_err());
+        let approved = tx.execute(APPROVE, (0, WALL + 3));
+        if permitted {
+            assert_eq!(approved.unwrap(), 1);
+            custody_schema::verify_approval_rows(&tx).unwrap();
+            assert!(tx.execute(APPROVE, (0, WALL + 4)).is_err());
+        } else {
+            assert!(approved.is_err());
+        }
+        writer.guard(&tx, true).unwrap();
+        rows::advance_wall(&tx, WALL + 3).unwrap();
+        drop(tx);
+
+        assert_eq!(stored(), before);
+        assert!(outside.execute(APPROVE, (0, WALL + 3)).is_err());
+        if permitted {
+            let tx = cp.cursor.with_wall(source.origin, WALL + 3).unwrap();
+            writer.guard(&tx, false).unwrap();
+            assert_eq!(tx.execute(APPROVE, (0, WALL + 3)).unwrap(), 1);
+            writer.guard(&tx, true).unwrap();
+            rows::advance_wall(&tx, WALL + 3).unwrap();
+            tx.commit().unwrap();
+            custody_schema::verify_approval_rows(&outside).unwrap();
+            assert_eq!(
+                stored(),
+                (3, Some(0), Some(WALL + 3), before.3, WALL + 3, WALL + 3)
+            );
+        }
+    }
 }
