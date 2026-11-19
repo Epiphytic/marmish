@@ -146,12 +146,56 @@ pub(crate) async fn qualified_recipient_fixture(
     .await
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) async fn qualified_both_command_fixture(
+    command: PublicKey,
+    third: PublicKey,
+    parent: &Path,
+    ordinary_relay: &str,
+    executable: &Path,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
+    assert_eq!(executable.canonicalize().unwrap(), executable);
+    qualified_manual_fixture(
+        command,
+        third,
+        parent,
+        Some((command, ordinary_relay)),
+        Some(executable),
+    )
+    .await
+}
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) async fn qualified_manual_recipient_fixture(
     founder: PublicKey,
     third: PublicKey,
     parent: &Path,
     command: Option<(PublicKey, &str)>,
+) -> (
+    Relay,
+    tempfile::TempDir,
+    Arc<ProfileLease>,
+    IdentityMaterial,
+) {
+    qualified_manual_fixture(founder, third, parent, command, None).await
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+async fn qualified_manual_fixture(
+    founder: PublicKey,
+    third: PublicKey,
+    parent: &Path,
+    command: Option<(PublicKey, &str)>,
+    executable: Option<&Path>,
 ) -> (
     Relay,
     tempfile::TempDir,
@@ -173,10 +217,22 @@ pub(crate) async fn qualified_manual_recipient_fixture(
                         Some((remote, relay)) => (relay, vec![remote.to_hex()]),
                         None => (origin, Vec::new()),
                     };
+                    let (role, execution, policy) = match executable {
+                        Some(path) => {
+                            assert_ne!(command_relay, origin);
+                            assert!(command.is_some());
+                            (
+                                "both",
+                                &trusted_remotes[..],
+                                serde_json::json!({"version":1,"defaults":{"allow_exec":[path]}}),
+                            )
+                        }
+                        None => ("client", &[][..], serde_json::json!({"version":1})),
+                    };
                     let config = serde_json::json!({
-                        "version":1, "role":"client", "relays":[command_relay], "tor":"off",
-                        "trusted_remotes":trusted_remotes, "execution_clients":[],
-                        "command_policy":{"version":1}, "cwd":null, "limits":{}, "aliases":{},
+                        "version":1, "role":role, "relays":[command_relay], "tor":"off",
+                        "trusted_remotes":trusted_remotes, "execution_clients":execution,
+                        "command_policy":policy, "cwd":null, "limits":{}, "aliases":{},
                         "peer":{"relay":origin, "relay_trust":trust, "receive":{"mode":"manual"}}
                     });
                     let bytes = serde_json::to_vec(&config).unwrap();

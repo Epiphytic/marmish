@@ -41,6 +41,13 @@ mod qualification;
 #[path = "peer_physical_route.rs"]
 mod physical_route;
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use physical_route::qualified_both_command_fixture;
 #[cfg(test)]
 pub(crate) use physical_route::qualified_recipient_fixture;
 pub(crate) use physical_route::{LivePhysicalRoute, PeerLiveDial, ReceiverRouteAdmission};

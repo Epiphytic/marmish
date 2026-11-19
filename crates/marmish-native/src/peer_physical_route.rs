@@ -672,6 +672,13 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::qualified_recipient_fixture;
 
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) use tests::qualified_both_command_fixture;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use tests::{qualified_founder_fixture, qualified_manual_recipient_fixture};
 
