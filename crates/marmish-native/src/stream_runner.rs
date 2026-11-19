@@ -54,6 +54,19 @@ pub(crate) struct RunnerSnapshot {
     pub terminal: Option<Terminal>,
     pub uncertain: bool,
 }
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReapObservation {
+    Pending,
+    Complete,
+    FailedNoChild,
+    Uncertain,
+}
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct TestFailure {
@@ -255,8 +268,18 @@ impl RunnerHandle {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    pub(crate) fn reap_uncertain(&self) -> bool {
-        self.control.shared.state().uncertain
+    pub(crate) fn reap_observation(&self) -> ReapObservation {
+        if !self.finished() {
+            return ReapObservation::Pending;
+        }
+        let state = self.control.shared.state();
+        if state.uncertain || state.terminal.is_none() {
+            ReapObservation::Uncertain
+        } else if matches!(state.terminal, Some(Terminal::Failed { .. })) {
+            ReapObservation::FailedNoChild
+        } else {
+            ReapObservation::Complete
+        }
     }
 
     #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
@@ -267,6 +290,11 @@ impl RunnerHandle {
             release.recv_timeout(Duration::from_secs(5)).unwrap();
             panic!("injected pre-spawn runner panic");
         })
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn not_started_for_test() -> Result<Self> {
+        Self::start_worker(|shared| shared.failed(false))
     }
     /// The owner calls this only AFTER the diagnostic child identity is committed.
     pub fn permit_input(&self) {

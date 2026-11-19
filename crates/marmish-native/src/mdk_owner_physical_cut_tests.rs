@@ -279,7 +279,7 @@ async fn previously_closed_slots_leave_ownership_unconfirmed() {
 }
 
 #[tokio::test]
-async fn joined_keeper_failure_differs_from_lost_keeper() {
+async fn joined_keeper_failure_and_lost_keeper_both_hold_without_child_proof() {
     let mut returned = Task::new(Some(tokio::spawn(async {
         Err::<(), _>(Error::Storage("engine_thread_failed"))
     })));
@@ -287,27 +287,28 @@ async fn joined_keeper_failure_differs_from_lost_keeper() {
     lost.abort();
     let mut lost = Task::new(Some(lost));
 
-    returned.observe(deadline(), |result| result.is_ok()).await;
-    lost.observe(deadline(), |result| result.is_ok()).await;
+    returned.observe(deadline(), engine_barrier).await;
+    lost.observe(deadline(), engine_barrier).await;
     assert!(returned.handle.is_none());
     assert!(lost.handle.is_none());
-    assert_eq!(returned.status, Barrier::Incomplete);
+    assert_eq!(returned.status, Barrier::PossiblyLive);
     assert_eq!(lost.status, Barrier::PossiblyLive);
-    let known_ended = Report {
+    let report = Report {
         engine: returned.status,
         runners: Barrier::Complete,
         sdk: Barrier::Complete,
         forwarder: Barrier::Complete,
         raw: Barrier::Complete,
     };
-    assert!(!known_ended.requires_process_hold());
-    assert!(
-        Report {
-            engine: lost.status,
-            ..known_ended
-        }
-        .requires_process_hold()
-    );
+    assert!(report.requires_process_hold());
+}
+
+#[tokio::test]
+async fn runner_proven_not_started_permits_failed_disposition() {
+    let runner = RunnerHandle::not_started_for_test().unwrap();
+    let mut status = Barrier::Pending;
+    observe_runners(&[runner], &mut status, deadline()).await;
+    assert_eq!(status, Barrier::Incomplete);
 }
 
 #[tokio::test]

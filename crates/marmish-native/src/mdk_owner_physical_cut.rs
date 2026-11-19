@@ -2,7 +2,9 @@
 use super::MdkOwner;
 use crate::{
     Error, Result, command_engine::CommandEngine, command_lifecycle::keep_fatal_engine,
-    identity::ProfileLease, stream_runner::RunnerHandle, transport::RelayConnector,
+    identity::ProfileLease,
+    stream_runner::{ReapObservation, RunnerHandle},
+    transport::RelayConnector,
 };
 use std::{mem::ManuallyDrop, sync::Arc, time::Duration};
 use tokio::{
@@ -17,6 +19,13 @@ pub(crate) enum Barrier {
     Complete,
     Incomplete,
     PossiblyLive,
+}
+
+fn engine_barrier(result: Result<()>) -> Barrier {
+    match result {
+        Ok(()) => Barrier::Complete,
+        Err(_) => Barrier::PossiblyLive,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,16 +66,12 @@ impl<T> Task<T> {
         Self { status, handle }
     }
 
-    async fn observe(&mut self, deadline: Instant, check: fn(T) -> bool) {
+    async fn observe(&mut self, deadline: Instant, check: fn(T) -> Barrier) {
         let Some(handle) = self.handle.as_mut() else {
             return;
         };
         if let Ok(joined) = timeout_at(deadline, handle).await {
-            self.status = match joined.map(check) {
-                Ok(true) => Barrier::Complete,
-                Ok(false) => Barrier::Incomplete,
-                Err(_) => Barrier::PossiblyLive,
-            };
+            self.status = joined.map_or(Barrier::PossiblyLive, check);
             self.handle = None;
         }
     }
@@ -179,10 +184,10 @@ impl PhysicalCut {
 
     pub(crate) async fn observe(&mut self, deadline: Instant) -> Report {
         tokio::join!(
-            self.engine.observe(deadline, |result| result.is_ok()),
+            self.engine.observe(deadline, engine_barrier),
             observe_runners(&self.runners, &mut self.runners_status, deadline),
-            self.sdk.observe(deadline, |()| true),
-            self.forwarder.observe(deadline, |()| true),
+            self.sdk.observe(deadline, |()| Barrier::Complete),
+            self.forwarder.observe(deadline, |()| Barrier::Complete),
             observe_raw(&self.parked.owner.connector, &mut self.raw, deadline),
         );
         self.report()
@@ -213,19 +218,29 @@ async fn observe_runners(runners: &[RunnerHandle], status: &mut Barrier, deadlin
     if *status != Barrier::Pending {
         return;
     }
-    while runners.iter().any(|runner| !runner.finished()) {
+    loop {
+        let mut observed = Barrier::Complete;
+        for runner in runners {
+            observed = match (observed, runner.reap_observation()) {
+                (_, ReapObservation::Uncertain) => Barrier::PossiblyLive,
+                (_, ReapObservation::Pending) => Barrier::Pending,
+                (Barrier::Complete, ReapObservation::FailedNoChild) => Barrier::Incomplete,
+                _ => observed,
+            };
+            if observed == Barrier::PossiblyLive {
+                break;
+            }
+        }
+        if observed != Barrier::Pending {
+            *status = observed;
+            return;
+        }
         let now = Instant::now();
         if now >= deadline {
             return;
         }
         sleep_until((now + Duration::from_millis(5)).min(deadline)).await;
     }
-    // The worker can drop its handles without proving that the child was reaped.
-    *status = if runners.iter().any(RunnerHandle::reap_uncertain) {
-        Barrier::PossiblyLive
-    } else {
-        Barrier::Complete
-    };
 }
 
 async fn observe_raw(connector: &RelayConnector, status: &mut Barrier, deadline: Instant) {
