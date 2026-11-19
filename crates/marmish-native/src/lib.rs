@@ -39,6 +39,22 @@ pub mod mdk_adapter;
     reason = "candidate handshake remains unmounted until the charged owner is ready"
 )]
 mod peer_candidate_startup;
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+mod registered_qualification;
+/// Dedicated private qualification executable entry. Call only from its fresh process main.
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[doc(hidden)]
+pub fn registered_qualification_entry() -> std::process::ExitCode {
+    registered_qualification::entry()
+}
 mod rsync_cli;
 mod stream_cli;
 mod stream_runner;

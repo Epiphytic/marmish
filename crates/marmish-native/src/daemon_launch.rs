@@ -23,6 +23,12 @@ const CLEANUP_GRACE: Duration = Duration::from_secs(45);
 const ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const MARKER: &str = "MARMISH_INTERNAL_STARTUP";
 const MARKER_VALUE: &str = "marmish-daemon-v1";
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+const PRIVATE_MARKER: &str = "marmish-registered-qualification-v1";
 const CHANNEL_FD: RawFd = 3;
 const MESSAGE_LIMIT: usize = 256;
 
@@ -55,12 +61,34 @@ impl StartupReporter {
         if marker != MARKER_VALUE || !foreground_daemon {
             return Err(Error::Invalid("daemon_startup_context"));
         }
+        Self::take_inherited_channel().map(Some)
+    }
+
+    /// Call only from the private qualification main before creating any threads.
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn take_registered_from_env() -> Result<Option<Self>> {
+        let Some(marker) = std::env::var_os(MARKER) else {
+            return Ok(None);
+        };
+        // SAFETY: the qualification executable is still single-threaded.
+        unsafe { std::env::remove_var(MARKER) };
+        if marker != PRIVATE_MARKER {
+            return Err(Error::Invalid("daemon_startup_context"));
+        }
+        Self::take_inherited_channel().map(Some)
+    }
+
+    fn take_inherited_channel() -> Result<Self> {
         validate_channel(CHANNEL_FD)?;
         set_cloexec(CHANNEL_FD)?;
         close_unrelated_fds()?;
         // SAFETY: validated inherited descriptor, uniquely transferred at entry.
         let stream = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
-        Ok(Some(Self(Arc::new(Mutex::new(Some(stream))))))
+        Ok(Self(Arc::new(Mutex::new(Some(stream)))))
     }
 
     /// Success is not committed until the live parent acknowledges readiness.

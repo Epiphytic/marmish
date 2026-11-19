@@ -1,8 +1,6 @@
 //! Private parent protocol and child ownership for registered qualification.
 use super::*;
 
-pub(crate) const PRIVATE_MARKER: &str = "marmish-registered-qualification-v1";
-
 #[must_use]
 pub(crate) struct RegisteredLaunch {
     pub(crate) child: Child,

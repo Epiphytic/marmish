@@ -19,6 +19,10 @@ path = "src/bin/marmishd.rs"
 name = "marmish-worker"
 path = "src/bin/marmish-worker.rs"
 
+[[example]]
+name = "marmish-registered-qualification"
+path = "examples/marmish-registered-qualification.rs"
+
 [features]
 installed-checks = []
 
