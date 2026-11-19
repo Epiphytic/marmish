@@ -12,9 +12,11 @@ Command and Terminal paths keep their existing behavior.
 
 - Keep `Layout::InstalledCustodyV2` for both modes. Add an
   `ApprovalV3` kind under the installed custody `Epoch`, with a distinct
-  immutable marker and exact inventory. All installed-family predicates,
-  including `is_installed_v2`, still cover both kinds. The legacy sweep and
-  local terminal-writing paths must continue to refuse both. The existing
+  immutable marker and exact inventory. Use a family predicate for legacy
+  sweep and local terminal-write refusal. Keep `is_installed_v2` exact to
+  the v2 kind. Preserve the existing v2 template and marker/state verifier
+  byte-for-byte, with separate v3 template, marker and Activating-row
+  verification. The existing
   private qualification executable gains an explicit
   `--manual-approve-recipient` intent mapped through
   `QualificationIntent` to the same Manual actor and
@@ -53,7 +55,8 @@ Command and Terminal paths keep their existing behavior.
   operation. Invalidate the producer before opening the write transaction.
   The existing read ticket's reply-time check then rejects a stale Pending
   result. Check exact current offer revision, retained Pending pin and
-  both persisted floors, and absence of terminal or stale turn in the same
+  the per-origin `peer_cursor_origin.wall` and singleton
+  `peer_consent_version.wall` floors, and absence of terminal or stale turn in the same
   IMMEDIATE transaction. Use the wall sampled at the commit's checked
   `use_current_recipient` and refuse equality with the effective cutoff.
   Consume local decision authority immediately before the state write.
@@ -79,9 +82,11 @@ Command and Terminal paths keep their existing behavior.
 - An actual authoritative positive retry recovers the original local result.
   After a lost exchange or prior unknown result, a client must treat any
   later non-positive response (including expiry, stale and Busy) as unable
-  to establish the first outcome. Include that distinction in candidate CLI
-  help and diagnostic wording, with an explicit recovery invocation for
-  the same selector. There is no general Activating query.
+  to establish the first outcome. The same Approve request either records
+  a Pending decision or reads back Activating. Its positive reply means
+  the decision is durable without identifying which invocation wrote it.
+  Describe reissuing that request and the outcome distinction in CLI help.
+  There is no general Activating query.
 
 ## Local IPC ownership
 
@@ -100,19 +105,29 @@ Command and Terminal paths keep their existing behavior.
   from `ipc.rs::is_command` and from the stock and ordinary read queues.
   A non-clone, one-use capability binds the listener incarnation, lease,
   typed request, reply lifetime, readiness, common Fatal and cancellation.
-  Socket waits and reply are bounded by the existing 15-second exchange.
+  Use `ipc.rs::uses_short_exchange` on this non-Command request. Socket
+  waits and reply are bounded by the existing 15-second exchange from
+  listener accept, with the client's own exchange bound unchanged.
   An unaccepted, expired, detached or cross-UID request has no authority.
 - Use one bounded local waiting position. Actor admission occurs only at a
-  rotor boundary with a reserve of at least six seconds on the exchange.
+  rotor boundary before the listener's six-second reserve starts. At
+  equality, the listener returns Busy if the request has not been claimed.
+  This reserve is measured against the deadline set when the listener
+  accepted the socket.
   Its single inclusive decision window is at most five seconds and is also
   fenced by reply liveness, the signed exclusive cutoff, actual qualified
   route and readiness. Before admission, Busy means no mutation and no
   later admission of that request. Actor claim and listener removal/expiry
   must arbitrate the same one-use position. A claimed request that loses
-  its reply is uncertain to that client. Check at loop entry and immediately
-  after each completed history or live turn, and once after any selected
-  managed effect before the next loop. At most one admitted decision per
-  rotor pass. Do not select a decision inside history, live, Join or
+  its reply is uncertain to that client. Neither approval nor retry is
+  admitted until the current incarnation has completed authenticated
+  history replay (`history_complete`). Before then the listener can
+  return unavailable or an unclaimed request can expire to Busy. This
+  prevents approving a locally retained revision that history is about
+  to supersede. Once complete, check at loop entry, after history or live
+  returns, and once after any selected managed effect before the next
+  loop. At most one admitted decision per rotor pass. Do not select a
+  decision inside history, live, Join or
   package awaits, or cancel those turns to obtain a slot. Defer a fresh
   refresh or recompute selected work after a decision so no old projection
   is revived.
@@ -122,7 +137,12 @@ Command and Terminal paths keep their existing behavior.
   the actual port plus readiness, stop, local route and shared Fatal;
   use their existing lifecycle outcomes to stop when applicable, never
   infer actor shutdown from the generic `effect_failed` mapping for a
-  refused local request. Stop closes both local apertures. Only the actor
+  refused local request. Separately verified persisted binding/inventory
+  integrity faults close Peer locally, and a clock regression rolls back
+  all speculative writes and uses the existing clock-refusal lifecycle.
+  A commit I/O failure with no proven durable outcome returns uncertain
+  when the reply is still live and closes the generation for cold reopen.
+  Stop closes both local apertures. Only the actor
   holds the SQL owner. Fault injection and extra fixture transports stay
   outside installed artifacts.
 
@@ -145,11 +165,16 @@ local refusal paths and record approval-to-durable-decision and IPC latency
 against the existing Manual timing evidence. Keep hosted CI on deterministic
 core tests and run private installed tests opt-in.
 
-Exercise requests arriving during history, Join and package effects, two
-concurrent clients, disconnected route, non-Command routing and continued
-List plus ordinary Command after an invalid or foreign request. Exercise
-legacy/new opener refusal in both directions and Auto mode refusal at SQL
-level. On restart assert the scheduler idles the same Activating row and
+Exercise requests arriving during unresolved startup history with a
+superseding revision, during Join and package effects, and at the exact
+six-second Busy cutoff. Cover two concurrent clients, disconnected route,
+non-Command routing and continued List plus ordinary Command after an
+invalid or foreign request. Exercise legacy/new opener refusal in both
+directions, byte-identical v2 inventory under the original intent, and
+Auto mode refusal at SQL level. Inject a commit I/O ambiguity separately
+from a lost reply, require uncertain, and retry only after cold reopen to
+recover the original decision when the write actually reached disk.
+On restart assert the scheduler idles the same Activating row and
 that exact signed Delivery replay completes without another join, change
 to the custody row or actor exit. The effective Pending cutoff limits
 decision and retry. Activating has no cleanup transition in this phase
