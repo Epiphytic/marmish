@@ -380,11 +380,12 @@ struct Percentiles {
 fn percentiles(values: impl IntoIterator<Item = i64>) -> Option<Percentiles> {
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort_unstable();
+    let max = *values.last()?;
     let rank = |percent: usize| values[(values.len() * percent).div_ceil(100) - 1];
     Some(Percentiles {
         p50: rank(50),
         p95: rank(95),
-        max: *values.last()?,
+        max,
     })
 }
 
@@ -516,6 +517,12 @@ mod tests {
         assert_eq!(log.records.len(), 1);
         assert_eq!(log.records[0].outcome, Outcome::NoPending);
         assert_eq!(log.event_bytes, line.len() + 1);
+    }
+
+    #[test]
+    fn empty_cohort_reports_an_incomplete_window_without_percentiles() {
+        assert!(percentiles([]).is_none());
+        assert!(!report("independent", &RefreshWindow::default(), &[], &[]));
     }
 
     #[test]
