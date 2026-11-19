@@ -69,7 +69,7 @@ pub(crate) enum Failure {
 }
 
 impl Failure {
-    fn category(self) -> &'static str {
+    pub(crate) fn category(self) -> &'static str {
         match self {
             Self::Unavailable => UNAVAILABLE,
             Self::Busy => "busy",
@@ -108,10 +108,6 @@ fn decode(selection: Selection, envelope: Envelope) -> Result<(), Failure> {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "candidate approval CLI is attached only during actor composition"
-)]
 pub(crate) async fn client_request(path: &Path, selection: Selection) -> Result<(), Failure> {
     let request = Request::new(selection);
     if !request.is_supported() {

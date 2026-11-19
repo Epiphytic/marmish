@@ -181,27 +181,60 @@ enum ClientInventoryCommand {
 
 #[cfg(marmish_peer_receiver_candidate)]
 #[derive(Subcommand)]
-enum ServerReadCommand {
+enum ServerCommand {
     /// List current Pending server enrollments.
     List,
     /// Show a current Pending enrollment by its exact selector.
-    Show {
-        #[arg(long, value_name = "NPUB")]
-        server: String,
-        #[arg(long, value_name = "HEX")]
-        offer_id: String,
-        #[arg(long, value_name = "HEX")]
-        revision: String,
-        #[arg(long, value_name = "N")]
-        generation: u64,
-    },
+    Show(ServerSelectionArgs),
+    /// Record local approval for an exact Pending enrollment.
+    #[command(
+        long_about = "Record local approval for an exact Pending enrollment. If the result is operation_uncertain, reissue the identical selection. A daemon restart can briefly return busy or peer_unavailable. A later refusal cannot resolve an earlier uncertain result."
+    )]
+    Approve(ServerSelectionArgs),
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+#[derive(clap::Args)]
+struct ServerSelectionArgs {
+    #[arg(long, value_name = "NPUB")]
+    server: String,
+    #[arg(long, value_name = "HEX")]
+    offer_id: String,
+    #[arg(long, value_name = "HEX")]
+    revision: String,
+    #[arg(long, value_name = "N")]
+    generation: u64,
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+impl ServerSelectionArgs {
+    fn selection(&self) -> std::result::Result<ipc::peer_approve::Selection, clap::Error> {
+        ipc::peer_approve::Selection::parse(
+            &self.server,
+            &self.offer_id,
+            &self.revision,
+            self.generation,
+        )
+        .map_err(|_| {
+            clap::Error::raw(
+                clap::error::ErrorKind::InvalidValue,
+                "invalid servers selection",
+            )
+        })
+    }
+}
+
+#[cfg(marmish_peer_receiver_candidate)]
+enum ServerRequest {
+    Read(ipc::peer_read::Request),
+    Approve(ipc::peer_approve::Selection),
 }
 
 #[derive(Subcommand)]
 enum FrontendCommand {
     #[cfg(marmish_peer_receiver_candidate)]
     #[command(skip)]
-    Servers(ipc::peer_read::Request),
+    Servers(ServerRequest),
     #[command(skip)]
     PeerRelayShow,
     #[command(skip)]
@@ -570,6 +603,7 @@ async fn run(
     }
     #[cfg(marmish_peer_receiver_candidate)]
     if let Some(FrontendCommand::Servers(request)) = &args.command {
+        use std::io::Write as _;
         let socket = match &args.socket {
             Some(path) => path.clone(),
             None => socket_path_for(
@@ -579,7 +613,22 @@ async fn run(
             )
             .map_err(|_| Error::Invalid("peer_unavailable"))?,
         };
-        let reply = ipc::peer_read::client_request(&socket, *request)
+        let request = match request {
+            ServerRequest::Read(request) => *request,
+            ServerRequest::Approve(selection) => {
+                return match ipc::peer_approve::client_request(&socket, *selection).await {
+                    Ok(()) => {
+                        writeln!(std::io::stdout().lock(), "recorded local approval")?;
+                        Ok(0)
+                    }
+                    Err(failure) => {
+                        writeln!(std::io::stderr().lock(), "marmish: {}", failure.category())?;
+                        Ok(1)
+                    }
+                };
+            }
+        };
+        let reply = ipc::peer_read::client_request(&socket, request)
             .await
             .map_err(|failure| {
                 use ipc::peer_read::Failure;
@@ -592,7 +641,6 @@ async fn run(
                 }
             })?;
         let json = serde_json::to_string(&reply).map_err(|_| Error::Invalid("report_encoding"))?;
-        use std::io::Write as _;
         writeln!(std::io::stdout().lock(), "{json}")?;
         return Ok(0);
     }
@@ -1529,7 +1577,7 @@ fn parse_frontend(raw: &[OsString], daemon_binary: bool) -> std::result::Result<
 fn candidate_client_matches(
     parser: clap::Command,
     raw: &[OsString],
-) -> std::result::Result<(clap::ArgMatches, Option<ipc::peer_read::Request>), clap::Error> {
+) -> std::result::Result<(clap::ArgMatches, Option<ServerRequest>), clap::Error> {
     // Let the stock parser recognize explicit remote argv before reserving
     // the unqualified local name. An unrelated separator cannot mask a bad
     // local invocation such as `servers list -- value`.
@@ -1547,7 +1595,7 @@ fn candidate_client_matches(
         .about("Inspect local Pending server enrollments")
         .subcommand_required(true);
     let mut matches = parser
-        .subcommand(ServerReadCommand::augment_subcommands(servers))
+        .subcommand(ServerCommand::augment_subcommands(servers))
         .try_get_matches_from(raw)?;
     if matches.subcommand_name() != Some("servers") {
         return Ok((matches, None));
@@ -1559,18 +1607,13 @@ fn candidate_client_matches(
         return Err(invalid("invalid local servers arguments"));
     }
     let (_, subcommand) = matches.remove_subcommand().expect("matched servers");
-    use ipc::peer_read::{Request, Selection};
-    let request = match ServerReadCommand::from_arg_matches(&subcommand)? {
-        ServerReadCommand::List => Request::List {},
-        ServerReadCommand::Show {
-            server,
-            offer_id,
-            revision,
-            generation,
-        } => Request::Show {
-            selection: Selection::parse(&server, &offer_id, &revision, generation)
-                .map_err(|_| invalid("invalid servers selection"))?,
-        },
+    use ipc::peer_read::Request;
+    let request = match ServerCommand::from_arg_matches(&subcommand)? {
+        ServerCommand::List => ServerRequest::Read(Request::List {}),
+        ServerCommand::Show(args) => ServerRequest::Read(Request::Show {
+            selection: args.selection()?,
+        }),
+        ServerCommand::Approve(args) => ServerRequest::Approve(args.selection()?),
     };
     Ok((matches, Some(request)))
 }
@@ -2194,16 +2237,18 @@ mod tests {
                 .contains("Inspect local Pending server enrollments")
         );
 
-        let raw = ["marmishd", "servers", "list"].map(OsString::from);
-        assert!(matches!(
-            parse_frontend(&raw, true).unwrap().command,
-            Some(FrontendCommand::Remote(_))
-        ));
-        #[cfg(not(marmish_peer_receiver_candidate))]
-        assert!(matches!(
-            public(&["marmish", "servers", "list"]).unwrap().command,
-            Some(FrontendCommand::Remote(_))
-        ));
+        for verb in ["list", "approve"] {
+            let raw = ["marmishd", "servers", verb].map(OsString::from);
+            assert!(matches!(
+                parse_frontend(&raw, true).unwrap().command,
+                Some(FrontendCommand::Remote(_))
+            ));
+            #[cfg(not(marmish_peer_receiver_candidate))]
+            assert!(matches!(
+                public(&["marmish", "servers", verb]).unwrap().command,
+                Some(FrontendCommand::Remote(_))
+            ));
+        }
     }
 
     #[cfg(marmish_peer_receiver_candidate)]
@@ -2227,7 +2272,9 @@ mod tests {
         .unwrap();
         assert!(matches!(
             args.command,
-            Some(FrontendCommand::Servers(Request::List {}))
+            Some(FrontendCommand::Servers(ServerRequest::Read(
+                Request::List {}
+            )))
         ));
         assert_eq!(args.identity, "worker");
         assert_eq!(args.socket, Some(PathBuf::from("explicit.sock")));
@@ -2238,35 +2285,44 @@ mod tests {
         let npub = founder.to_bech32().unwrap();
         let offer = "ab".repeat(16);
         let revision = "cd".repeat(32);
-        let show = |principal: &str, offer: &str, revision: &str, generation: &str| {
-            public(&[
-                "marmish",
-                "servers",
-                "show",
-                "--server",
-                principal,
-                "--offer-id",
-                offer,
-                "--revision",
-                revision,
-                "--generation",
-                generation,
-            ])
-        };
+        let parse =
+            |action: &str, principal: &str, offer: &str, revision: &str, generation: &str| {
+                public(&[
+                    "marmish",
+                    "servers",
+                    action,
+                    "--server",
+                    principal,
+                    "--offer-id",
+                    offer,
+                    "--revision",
+                    revision,
+                    "--generation",
+                    generation,
+                ])
+            };
         assert!(matches!(
-            show(&npub, &offer, &revision, "3").unwrap().command,
-            Some(FrontendCommand::Servers(Request::Show { selection }))
+            parse("show", &npub, &offer, &revision, "3").unwrap().command,
+            Some(FrontendCommand::Servers(ServerRequest::Read(Request::Show { selection })))
                 if selection.server == founder && selection.generation == 3
                     && selection.offer_id == [0xab; 16] && selection.revision == [0xcd; 32]
         ));
-        for invalid in [
-            show(&npub.to_ascii_uppercase(), &offer, &revision, "3"),
-            show("founder-alias", &offer, &revision, "3"),
-            show(&npub, &offer.to_ascii_uppercase(), &revision, "3"),
-            show(&npub, &offer, "cd", "3"),
-            show(&npub, &offer, &revision, "0"),
-        ] {
-            assert_eq!(usage_exit_code(&invalid.err().unwrap()), 255);
+        assert!(matches!(
+            parse("approve", &npub, &offer, &revision, "3").unwrap().command,
+            Some(FrontendCommand::Servers(ServerRequest::Approve(selection)))
+                if selection.server == founder && selection.generation == 3
+                    && selection.offer_id == [0xab; 16] && selection.revision == [0xcd; 32]
+        ));
+        for action in ["show", "approve"] {
+            for invalid in [
+                parse(action, &npub.to_ascii_uppercase(), &offer, &revision, "3"),
+                parse(action, "founder-alias", &offer, &revision, "3"),
+                parse(action, &npub, &offer.to_ascii_uppercase(), &revision, "3"),
+                parse(action, &npub, &offer, "cd", "3"),
+                parse(action, &npub, &offer, &revision, "0"),
+            ] {
+                assert_eq!(usage_exit_code(&invalid.err().unwrap()), 255);
+            }
         }
         for invalid in [
             &["servers"][..],
@@ -2292,6 +2348,26 @@ mod tests {
         assert_eq!(usage_exit_code(&help), 0);
         for flag in ["--server", "--offer-id", "--revision", "--generation"] {
             assert!(help.to_string().contains(flag));
+        }
+
+        let help = public(&["marmish", "servers", "approve", "--help"])
+            .err()
+            .unwrap();
+        assert_eq!(usage_exit_code(&help), 0);
+        let help = help
+            .to_string()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        for text in [
+            "--server",
+            "--offer-id",
+            "--revision",
+            "--generation",
+            "operation_uncertain, reissue the identical selection",
+            "A later refusal cannot resolve an earlier uncertain result",
+        ] {
+            assert!(help.contains(text));
         }
     }
 
@@ -2321,6 +2397,7 @@ mod tests {
                 "/bin/echo",
                 "show",
             ],
+            &["marmish", "servers", "--", "/bin/echo", "approve"],
             &["marmish", &relay_target, "--", "/bin/echo", "list"],
             &["marmish", "-u", "name", "--", "servers", "list"],
         ] {
