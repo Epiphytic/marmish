@@ -1,88 +1,104 @@
 # Connect the candidate daemon's ordinary service admissions
 
-This slice implements the ordinary startup and service-loop ownership from
+This Linux AMD64 phase qualifies a private, registered Command service with
+one profile and one listener. It extends
 [daemon composition](peer-candidate-daemon-composition.md) and
-[dispatcher shutdown](peer-candidate-dispatcher-shutdown.md). It uses the
-existing Linux AMD64 candidate build gate. Keep the registration and physical
-cut internal until the constructor, Command startup, Terminal, IPC and active
-loop can all use the same ownership boundary. The ordinary stock `daemon::open`
-and default release behavior remain as they are. Manual actor and Pending reads
-are a follow-on mount after the complete ordinary path is qualified.
+[dispatcher shutdown](peer-candidate-dispatcher-shutdown.md). Stock startup,
+Terminal and releases use their existing path. Manual invitations and Pending
+reads follow this increment.
 
-## Construct and transfer ownership
+## Cut A. Qualify the checked owner
 
-- Keep one config selection, prepared material, policy and `ServiceLifetime`.
-  Factor the existing preparation into an internal value if needed to keep one
-  stock setup path. Only `run_inner` may request the registered path. Decline
-  effective `policy.needs_tor()` before preparing a receiver. Build the same
-  ordinary connector; create its checked fatal derivative only after registration.
-- Preserve the registration failure table in the composition plan. Prepare on the
-  original `Arc<ProfileLease>`. Unwrap that same lease on a pre-registration
-  exclusion or proved `Untouched`. Treat uncertainty and duplicate registration
-  as startup errors. Take the Command fence once, derive `Admission` from it and
-  retain the exact verifier and `Fatal`. A later Peer-local decline keeps the
-  ordinary registered mode and the same Arc for the daemon lifetime. The registered
-  account binding check is read-only and uses the opened binding, never a second
-  acquisition or a rewrite of the Ready manifest.
-- Use guarded native preflight and the checked account constructor. At each
-  later preparation step admit the effect and own returned resources before a
-  subsequent check. Use the existing retention and inventory reconciliation.
-  Split an admission check between independent durable turns inside Command
-  setup, including history, limit configuration, engine binding and recovery.
-  Keep one common `enable_commands` body. Resolve worker and helper through the
-  same checked native layout. Select the existing `CommandEngine::start_candidate`
-  with the same Admission after the recovery snapshot. Once the engine returns,
-  attach it to the owned Command service before any final admission or return.
-  Carry `ServiceLifetime` as before. Never detach a returned worker on startup
-  failure. Check Command and Terminal turn boundaries even on Client profiles
-  where there is no ordinary launcher or Terminal supervisor registry.
-- Use the reviewed Terminal route from the same fatal-fenced connector and the
-  same held profile. Keep the registry creation, worker transfer and join on its
-  own checked path. Startup must retain both the owner and any started Terminal
-  runtime until their selected disposition can observe the real tasks. If this
-  proof is unavailable, the registered branch remains unmounted.
+- Share the stock and candidate constructors. The daemon caller runs guarded
+  native preflight with the exact Admission and held lease. The candidate
+  constructor checks that Admission across account smoke open, smoke close,
+  reopen, Journal open, lifecycle reads and writes, binding and runtime setup.
+  Record each returned SQLCipher-bearing root in partial startup custody
+  before the next independent effect. Route Journal opens through the guarded
+  constructor. The trusted path uses the existing Journal close and reviewed
+  account DatabaseCloser. After trust loss, preserve returned roots and the
+  original lease through process exit. Physical shutdown separately establishes
+  that the parked roots carry no active tasks or child owners.
+- Share ordinary Command setup. Recheck between history, limits, binding,
+  recovery and engine launch. Use the same checked native worker and helper
+  layout. Pass the same Admission to the candidate engine constructor. Attach
+  a returned engine to owned Command state before another admission, including
+  on any later error, and preserve the original service lifetime.
+- Check the active owner's exact Admission before activation, status or exit
+  criteria, dispatch, tick, retention, inventory, room effects and each
+  separately resumed stateful turn. Check again before reply. Race
+  independently cancellable futures against the asynchronous fatal wake.
+  Reuse existing owner effect boundaries.
+- Qualify startup custody, Command setup and the independent owner physical
+  cut in disposable processes. The decisive integrated tests displace the
+  real registered default. Test-only synchronization can control timing.
 
-## Local service and disposition
+## Cut B. Own the registered service from startup to exit
 
-Keep one `serve_owner` and one existing IPC listener. Enable its bounded drain
-path for registered service independent of fixtures or whether Peer becomes
-available. A checked process-fatal wake participates in the existing selects and
-wins against dispatch, activation, tick, room work and ordinary stop. Use exact
-admission for synchronous stateful turns and have owner methods check separately
-resumed effects where they can span multiple admissions. A canceled async branch
-is discarded. An in-flight synchronous body may return; a new effect or reply
-needs a new admission. Ensure that Status and Terminal transfers on the listener
-cannot use stale authority while the owner is scheduled out. Preserve existing
-stock retries, signal ownership, limits and startup/error behavior.
+- Keep config and identity selection shared. Only the daemon start may
+  request registration. Resolve the actual relay policy and exclude effective
+  Tor before preparing a receiver. Follow the parent registration failure
+  table. Prepare on the original profile lease Arc. For exclusions or proved
+  Untouched failures, drop temporary witnesses, then unwrap the original
+  lease and proceed on the stock path. Treat duplicate or uncertain
+  registration as startup failure.
+- After confirmed registration, take the single-use Command fence and
+  retain the exact Admission, verifier and Fatal. Apply the fatal derivative
+  to the still-unique connector before any cloning or constructing the owner.
+  Verify the Ready binding read-only against the opened account. Retain the
+  original lease Arc across Opened, service and disposition. A Peer-local
+  failure preserves registered ordinary service. Fatal does not depend on
+  unwrapping the lease Arc.
+- One consuming ServiceCustody holds the original lease, Admission, Fatal,
+  optional owner including Command engine and connector, listener handle
+  and outstanding stop obligations. Its transitions are Starting, Active,
+  HealthyStopping and FatalPhysical. Create custody immediately after
+  confirmed registration. Every error afterward enters owned disposition,
+  including a failure after returning from engine launch or binding the
+  listener. Retain returned handles before another admission. Close input
+  and discard queued work on entry to stop.
+- Reuse the existing IPC listener with the same Fatal and independent drain.
+  Borrow each socket inside the raw-stream fence for every frame read and
+  write. Check when classifying a completed request and before queue entry,
+  handing off a socket or serving cached Status. Fatal breaks accept and
+  retry while the owner is scheduled out. Close read authority and listener
+  before canceling and joining listener-owned tasks. In the candidate owner
+  prioritize the fatal wake over ready ordinary effects, replies and shutdown.
+- Registered Cut B starts no Terminal supervisor or intake. Its healthy
+  TerminalStart response is terminal_unavailable. After the latch the
+  connection can close without a response. Registered Terminal follows
+  qualification of the room SQL and transport, Registry and physical Terminal
+  worker ownership. The stock Terminal continues to support interactive use.
+- Start every physical stop barrier before waiting for any of them. The
+  healthy candidate stop owns the original handles and admits each graceful
+  effect separately, including resumed effects. It returns either a bounded
+  ordinary report or the fatal handoff with the remaining handles. Do not
+  delegate to the stock detached Frontend or retrying keeper. The latter can
+  loop on candidate_dispatcher_lost with the engine. Convert the exact engine
+  to its physical join on loss and preserve already observed obligations.
+- FatalPhysical observes the existing listener and physical owner cut
+  for engine, runner, SDK including nested forwarders, and raw transport.
+  Skip deactivation, Journal/SQLCipher close and runtime-tree cleanup after
+  loss. Park untrusted roots and the original lease through process exit.
+  Failed or timed-out observations retain outstanding handles and preclude a
+  successful shutdown report. Prevent implicit native destructor execution
+  during runtime teardown on fatal.
 
-Start each physical stop cut before awaiting any of them. One guard owns the
-startup/active owner, lease and worker obligations. If the exact dispatcher
-continues to verify, use the existing healthy stop, with guarded resource close
-admissions. On fatal, revoke IPC/Terminal intake, cancel and drain the listener,
-reap Terminal and the independently reviewed owner physical cuts, and park
-untrusted native roots. Do not call graceful deactivation, Journal, SQLCipher
-close or runtime-tree removal through a lost dispatcher. If displacement occurs
-during ordinary shutdown, transition at the next independent effect into the
-remaining physical disposition; already observed obligations stay complete. A
-failed or timed-out observation retains ownership and the original lease. Every
-startup error path, including after worker creation or listener bind, enters the
-same owned disposition. An active candidate may only enter the new startup path
-when all the above dependencies are present together.
+## Installed qualification
 
-## Qualification
+Use disposable independent processes because registration is process-global.
+Exercise stock Setup, Client and daemon behavior. Prove registered exclusion
+for Initializing, non-daemon entry points and effective Tor. Run the registered
+daemon with a Ready profile and the matching installed layout, foreground and
+parent-reported. Verify one lease, listener and startup report. Run finite
+Commands over controlled WSS and check exact bytes and exit status. Verify
+healthy restart and registered Terminal refusal while stock still runs Terminal.
 
-Use independent disposable Linux processes because dispatcher registration is
-process-global. Run stock native daemon behavior and candidate refusal for
-Initializing, non-running entry points and effective Tor. Run real qualified
-startup with the original Ready manifest and matching native layout, under
-foreground and parent-reported startup. Verify one profile lease, one listener,
-one report, finite Command success and Terminal byte round-trip over controlled
-WSS on the admitted path. Exercise real cuts before native opens, during worker
-setup, while activation/dispatch/tick/room work is pending, after a local reply
-has queued, and during verified shutdown. Use actual displacement for decisive
-fence tests; test-only hooks may synchronize observation with a particular turn.
-Require listener/socket and worker proof, retained lease, no stale successful
-reply or clean report after fatal, and unchanged native evidence after the last
-admitted storage call. Prove safe clean restart after healthy shutdown. Run
-stock and candidate strict checks and obtain exact integrated Claude Code Auto
-review before publishing or wiring a live actor.
+Force decisive real dispatcher loss before native opens, after engine launch
+and before successful startup reporting, during activation/dispatch/tick/room
+work, before a queued reply and while healthy stop is waiting for its worker.
+Check stale Status while the owner is scheduled out. Require actual socket and
+worker dispositions, retained lease, unchanged native evidence after the last
+admitted effect and no successful report after failed admission. Obtain strict
+stock/candidate validation and exact integrated Claude Code Auto approval
+before publishing or mounting the live invitation actor.
