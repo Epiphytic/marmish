@@ -123,10 +123,15 @@ checks exact same-row SQLCipher and native group state before publishing a
 local List or Show result. The proof uses a guarded private WSS fixture.
 The [installed Manual listener handoff](validation/peer-candidate-manual-handoff.md)
 qualifies the private Linux AMD64 actor's sole projection writer and the
-same-UID listener that reads its view. In this increment Manual returns
-`peer_unavailable` while ordinary Commands continue through both healthy
-and disconnected Peer paths. The stock launchers have no private mode flag.
-The daemon does not yet serve invitations or positive Pending reads.
+same-UID listener that reads its view. That prerequisite returned
+`peer_unavailable` while ordinary Commands continued through both healthy
+and disconnected Peer paths. The [installed Manual proof](validation/peer-candidate-manual-installed.md)
+now covers an independent signed Offer, Consent and Delivery, the exact local
+Pending List/Show projection, a cold reopen and two preserved binary Command
+results across a Peer disconnection. It uses a private Linux AMD64
+qualification build and separate authenticated WSS origins. The stock
+launchers have no private mode flag. Public invitation approval, automatic
+acceptance, and heartbeats are still under development.
 The [private Peer record codec](validation/peer-status-codec.md) verifies
 heartbeat fields, capability states and complete permission snapshot
 assembly in deterministic tests. The [heartbeat sampler](validation/peer-heartbeat-sampler.md)
@@ -139,9 +144,9 @@ returns, then observes exact native retry and replay-safe client projection.
 Status publication and reception remain inactive in the installed daemon.
 The [private candidate server inventory CLI](validation/peer-candidate-read-cli.md)
 adds `marmish servers list` and exact `servers show` selectors for local Pending
-reads. The idle private actor currently answers `peer_unavailable` without
-running the invitation service. Stock client and daemon command parsing
-remain unchanged.
+reads. The installed Manual proof covers positive Pending results. The read
+surface returns `peer_unavailable` while the source is unqualified or
+disconnected. Stock client and daemon command parsing remain unchanged.
 The [candidate VFS registration proof](validation/peer-candidate-preflight-registration.md)
 qualifies sealed receiver registration under the ordinary profile lease,
 forwards ordinary SQLite calls and fences reserved Peer database names. It
@@ -161,7 +166,7 @@ qualification example runs against a verified installed layout. The
 adds a private Linux AMD64 authenticated subscription after readiness.
 Ordinary commands work with that connection active and after a physical
 Peer disconnect. The private gate uses the qualification example. Public
-activation, managed invitation service and heartbeats still need live proofs.
+activation and heartbeats still need live proofs.
 The [idle engine shutdown validation](validation/peer-candidate-idle-command-stop.md)
 covers the integrated shutdown path with an in-process real Command engine
 and the stock core regression selectors on Linux AMD64. A proved idle
