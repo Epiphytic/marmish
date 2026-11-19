@@ -173,6 +173,22 @@ pub(crate) struct Binding {
     target_arch = "x86_64"
 ))]
 impl Binding {
+    #[cfg(test)]
+    pub(in crate::peer_invitation) fn fixture_unknown(
+        key: Selector,
+        origin: Origin,
+        count: u64,
+    ) -> Self {
+        Self {
+            key,
+            origin,
+            generation: Generation {
+                known: false,
+                count,
+            },
+        }
+    }
+
     pub(crate) fn coordinates(self) -> (bool, u64, Origin, Selector) {
         (
             self.generation.known,

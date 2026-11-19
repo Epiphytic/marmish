@@ -186,18 +186,22 @@ pub(crate) fn committed_approval(
     {
         return Err("decision_floor");
     }
-    let stage_matches = (0..16)
-        .filter_map(|index| {
-            use super::paths::StageSlot;
-            let stage = paths.stage(StageSlot::new(index).ok()?).ok()?;
-            let meta = std::fs::symlink_metadata(stage.path()).ok()?;
-            Some((meta.dev(), meta.ino()))
-        })
-        .filter(|identity| *identity == saved.stage)
-        .count();
-    if stage_matches != 1 {
-        return Err("keeper_identity");
-    }
+    let binding = Binding::fixture_unknown(
+        Selector {
+            server: selection.server,
+            id: selection.offer_id,
+            revision: selection.revision,
+        },
+        route.id,
+        selection.generation,
+    );
+    let witness = FileWitness {
+        device: saved.stage.0.to_be_bytes(),
+        inode: saved.stage.1.to_be_bytes(),
+    };
+    paths
+        .reopen_provisional(binding, witness)
+        .map_err(|_| "keeper_identity")?;
     cursor.unchanged().map_err(|_| "cursor_identity")?;
     Ok(saved)
 }
