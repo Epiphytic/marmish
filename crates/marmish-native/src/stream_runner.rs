@@ -54,6 +54,19 @@ pub(crate) struct RunnerSnapshot {
     pub terminal: Option<Terminal>,
     pub uncertain: bool,
 }
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReapObservation {
+    Pending,
+    Complete,
+    FailedNoChild,
+    Uncertain,
+}
 #[cfg(test)]
 #[derive(Debug, Default)]
 struct TestFailure {
@@ -212,6 +225,10 @@ impl RunnerHandle {
         {
             return Err(Error::Invalid("stream_runner_limits"));
         }
+        Self::start_worker(move |shared| run(prepared, shared, limits))
+    }
+
+    fn start_worker(body: impl FnOnce(&Shared) + Send + 'static) -> Result<Self> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State::default()),
             cancel: AtomicBool::new(false),
@@ -223,14 +240,13 @@ impl RunnerHandle {
         let worker = thread::Builder::new()
             .name("marmish-stream".into())
             .spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run(prepared, &owned, limits)
-                }));
+                let result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&owned)));
                 if result.is_err() {
                     owned.failed(true);
                 }
-                // run() has returned or fully unwound: its child owner and every
-                // pipe have been dropped before the service can release a lease.
+                // The body returned or unwound and dropped its Rust handles.
+                // The cleanup flag separately records whether reaping was proved.
                 owned.finished.store(true, Ordering::Release);
             })?;
         let wake = worker.thread().clone();
@@ -241,9 +257,44 @@ impl RunnerHandle {
             control: Arc::new(Control { shared, wake }),
         })
     }
-    /// True only after the worker has released all child and pipe ownership.
+    /// True after the worker drops its child and pipe handles. Reaping can
+    /// still be uncertain.
     pub fn finished(&self) -> bool {
         self.control.shared.finished.load(Ordering::Acquire)
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn reap_observation(&self) -> ReapObservation {
+        if !self.finished() {
+            return ReapObservation::Pending;
+        }
+        let state = self.control.shared.state();
+        if state.uncertain || state.terminal.is_none() {
+            ReapObservation::Uncertain
+        } else if matches!(state.terminal, Some(Terminal::Failed { .. })) {
+            ReapObservation::FailedNoChild
+        } else {
+            ReapObservation::Complete
+        }
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn panic_before_child_for_test(
+        release: std::sync::mpsc::Receiver<()>,
+    ) -> Result<Self> {
+        Self::start_worker(move |_| {
+            release.recv_timeout(Duration::from_secs(5)).unwrap();
+            panic!("injected pre-spawn runner panic");
+        })
+    }
+
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn not_started_for_test() -> Result<Self> {
+        Self::start_worker(|shared| shared.failed(false))
     }
     /// The owner calls this only AFTER the diagnostic child identity is committed.
     pub fn permit_input(&self) {

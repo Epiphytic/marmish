@@ -242,7 +242,10 @@ fn stale_cached_observations_and_queue_admissions_are_hidden() {
             .is_err()
     );
     assert!(matches!(controls.try_recv(), Err(TryRecvError::Empty)));
-    fatal_join(handle).wait().unwrap();
+    assert!(matches!(
+        fatal_join(handle).wait(),
+        Err(Error::Storage("engine_thread_failed"))
+    ));
 }
 
 #[test]
@@ -303,12 +306,14 @@ fn owner_retirement_drops_healthy_slots_and_parks_fatal_slots() {
 #[test]
 fn handle_finished_before_report_still_selects_fatal() {
     let (mut handle, _operations, _controls, _events) = handle();
+    handle.thread = Some(thread::spawn(|| {}));
     let trip = Arc::new(Trip::new().0);
     handle.mode = checked(&trip);
     assert!(matches!(
         handle.stop_outcome(deadline()),
         Ok(StopOutcome::Ordinary(StopReport { complete: true, .. }))
     ));
+    assert!(handle.worker_joined());
     trip.trip();
     assert!(matches!(
         handle.stop_outcome(deadline()),

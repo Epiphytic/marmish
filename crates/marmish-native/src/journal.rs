@@ -165,9 +165,13 @@ impl Journal {
         Ok(journal)
     }
 
-    pub(crate) fn close(self) -> Result<()> {
+    pub(crate) fn close(mut self) -> Result<()> {
+        self.close_in_place()
+    }
+
+    pub(crate) fn close_in_place(&mut self) -> Result<()> {
         self.conn
-            .close()
+            .close_in_place()
             .map_err(|error| host_storage_error(error, "journal"))
     }
 

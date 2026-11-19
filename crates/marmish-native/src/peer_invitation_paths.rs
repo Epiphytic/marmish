@@ -227,6 +227,19 @@ impl CheckedFile {
         &self.path
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(super) fn matches_file(&self, file: &File) -> Result<()> {
+        let meta = file.metadata().map_err(|_| Error::Path)?;
+        if (meta.dev(), meta.ino()) != self.before {
+            return Err(Error::Path);
+        }
+        self.unchanged()
+    }
+
     pub(super) fn unchanged(&self) -> Result<()> {
         let dir = self.path.parent().ok_or(Error::Path)?;
         directory(dir)?;

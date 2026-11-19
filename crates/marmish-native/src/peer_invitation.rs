@@ -39,6 +39,13 @@ pub(crate) use native_fence::{NativeFence, NativeWindow, SchemaWindow};
     target_arch = "x86_64"
 ))]
 pub(crate) use store::consent_checkpoint::wire::Delivery;
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_recipient.rs"]
+pub(crate) mod installed_recipient;
 #[path = "peer_invitation_paths.rs"]
 mod paths;
 #[cfg(test)]

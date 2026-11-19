@@ -10,6 +10,11 @@ mod command_runtime;
 #[cfg(feature = "installed-checks")]
 #[path = "installed_check.rs"]
 pub(crate) mod installed_check;
+#[path = "mdk_startup.rs"]
+mod startup;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use startup::tests as candidate_startup_tests;
+use startup::{StartupMode, StartupStorage, Step};
 #[path = "stream_runtime.rs"]
 mod stream_runtime;
 #[path = "terminal_command_authority.rs"]
@@ -890,6 +895,8 @@ pub struct MdkOwner {
     command_probe: Option<command_adapter::CommandProbe>,
     command_source_cursor: Option<crate::journal::SourceCursor>,
     command_invalidation_cursor: Option<crate::journal::SourceKey>,
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    startup_custody: Option<startup::AccountCustody>,
 }
 type PendingKey = (u8, Vec<u8>);
 fn select_pending(
@@ -925,6 +932,73 @@ impl MdkOwner {
         connector: RelayConnector,
         allowed_peers: Vec<String>,
     ) -> Result<Self> {
+        Self::construct(
+            profile,
+            material,
+            connector,
+            allowed_peers,
+            StartupMode::Stock,
+        )
+    }
+
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    #[allow(dead_code, reason = "candidate daemon mount is composed separately")]
+    pub(crate) fn open_candidate(
+        profile: &Arc<ProfileLease>,
+        material: &IdentityMaterial,
+        connector: RelayConnector,
+        allowed_peers: Vec<String>,
+        admission: crate::command_engine::Admission,
+    ) -> Result<Self> {
+        Self::construct(
+            profile,
+            material,
+            connector,
+            allowed_peers,
+            StartupMode::candidate(profile.clone(), admission),
+        )
+    }
+
+    fn construct(
+        profile: &ProfileLease,
+        material: &IdentityMaterial,
+        connector: RelayConnector,
+        allowed_peers: Vec<String>,
+        mode: StartupMode,
+    ) -> Result<Self> {
+        let mut startup = StartupStorage::default();
+        let pending = Self::open_inert(
+            profile,
+            material,
+            connector,
+            allowed_peers,
+            &mode,
+            &mut startup,
+        );
+        let mut owner = pending.map_err(|error| startup.finish_error(error))?;
+        let result = mode
+            .before(Step::Binding)
+            .and_then(|()| owner.reconcile_startup(&mode));
+        match result {
+            Ok(()) => Ok(owner),
+            Err(error) => {
+                #[cfg(any(test, marmish_peer_receiver_candidate))]
+                if owner.startup_custody.is_some() {
+                    owner.finish_candidate_startup()?;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn open_inert(
+        profile: &ProfileLease,
+        material: &IdentityMaterial,
+        connector: RelayConnector,
+        allowed_peers: Vec<String>,
+        mode: &StartupMode,
+        startup: &mut StartupStorage,
+    ) -> Result<Self> {
         let identity = material.public_key().to_hex();
         let mut allowed = BTreeSet::new();
         for p in allowed_peers {
@@ -943,25 +1017,26 @@ impl MdkOwner {
             .map_err(|_| Error::Storage("derive"))?;
         hk.expand(b"journal", jk.as_mut())
             .map_err(|_| Error::Storage("derive"))?;
-        marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))?;
-        // Close/reopen proof precedes constructing any networking object. The
-        // retained clone below shares one connection rather than reopening it.
-        drop(mdk(SqliteAccountStorage::open_encrypted(
-            profile.mdk_database(),
-            &SqlCipherKey::raw(*mk),
-        ))?);
-        let storage = mdk(SqliteAccountStorage::open_encrypted(
-            profile.mdk_database(),
-            &SqlCipherKey::raw(*mk),
-        ))?;
-        drop(Journal::open(profile.journal_database(), &jk, &identity)?);
-        let journal = Journal::open(profile.journal_database(), &jk, &identity)?;
-        if mdk(storage.key_package_lifecycle())?.is_none() {
-            mdk(
-                storage.put_key_package_lifecycle(&KeyPackageLifecycleState::slot_only(
-                    hex::encode(material.device_slot()),
-                )),
-            )?;
+        mode.effect(Step::Initialize, || {
+            marmish_engine::initialize_storage().map_err(|_| Error::Storage("sqlcipher_init"))
+        })?;
+        let smoke = startup.open_account(mode, Step::AccountSmoke, profile, &mk)?;
+        startup.close_smoke_account(mode, smoke)?;
+        let storage = startup.open_account(mode, Step::AccountOpen, profile, &mk)?;
+        startup.open_journal(mode, Step::JournalSmoke, profile, &jk, &identity)?;
+        startup.close_smoke_journal(mode)?;
+        startup.open_journal(mode, Step::JournalOpen, profile, &jk, &identity)?;
+        if mode
+            .effect(Step::LifecycleRead, || mdk(storage.key_package_lifecycle()))?
+            .is_none()
+        {
+            mode.effect(Step::LifecycleWrite, || {
+                mdk(
+                    storage.put_key_package_lifecycle(&KeyPackageLifecycleState::slot_only(
+                        hex::encode(material.device_slot()),
+                    )),
+                )
+            })?;
         }
         let keys = material.signer();
         let client = connector.sdk_client(keys.clone())?;
@@ -1007,20 +1082,24 @@ impl MdkOwner {
             loss: notification_loss.clone(),
             baseline: Arc::new(RwLock::new(notification_loss.borrow().clone())),
         };
-        let runtime = mdk(AccountDeviceRuntime::open(config, || {
-            Ok::<_, marmot_session::SessionError>((
-                publication.clone(),
-                routing.clone(),
-                Publisher {
-                    keys,
-                    relay: relay.clone(),
-                },
-            ))
-        }))?;
-        let mut owner = Self {
+        let runtime = mode.effect(Step::Runtime, || {
+            mdk(AccountDeviceRuntime::open(config, || {
+                #[cfg(test)]
+                let _ = mode.probe(Step::RuntimeOpened);
+                Ok::<_, marmot_session::SessionError>((
+                    publication.clone(),
+                    routing.clone(),
+                    Publisher {
+                        keys,
+                        relay: relay.clone(),
+                    },
+                ))
+            }))
+        })?;
+        Ok(Self {
             runtime,
             storage,
-            journal,
+            journal: startup.journal.take().expect("startup Journal is open"),
             adapter,
             publication,
             routing,
@@ -1055,22 +1134,41 @@ impl MdkOwner {
             command_probe: None,
             command_source_cursor: None,
             command_invalidation_cursor: None,
-        };
-        for c in owner
-            .journal
-            .conversations()?
-            .into_iter()
-            .filter(|c| c.revoked)
-        {
-            let g = GroupId::new(hex::decode(c.group_id).map_err(|_| Error::Storage("group_id"))?);
-            mdk(owner.runtime.forget_group_local(&g))?;
-        }
-        owner.reconcile_orphans()?;
-        owner.maintain_journal()?;
-        owner.rebuild_routes()?;
-        owner.reconcile_invalidations()?;
-        Ok(owner)
+            #[cfg(any(test, marmish_peer_receiver_candidate))]
+            startup_custody: startup.custody.take(),
+        })
     }
+
+    fn reconcile_startup(&mut self, mode: &StartupMode) -> Result<()> {
+        let conversations = mode.effect(Step::Revoked, || self.journal.conversations())?;
+        for row in conversations.into_iter().filter(|row| row.revoked) {
+            let group =
+                GroupId::new(hex::decode(row.group_id).map_err(|_| Error::Storage("group_id"))?);
+            mode.effect(Step::ForgetGroup, || {
+                mdk(self.runtime.forget_group_local(&group))
+            })?;
+        }
+        mode.effect(Step::Orphans, || self.reconcile_orphans())?;
+        mode.effect(Step::Maintain, || self.maintain_journal())?;
+        mode.effect(Step::Routes, || self.rebuild_routes())?;
+        mode.effect(Step::Invalidations, || self.reconcile_invalidations())?;
+        mode.before(Step::Return)
+    }
+
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    fn finish_candidate_startup(mut self) -> Result<()> {
+        self.terminal_authority.retire_all();
+        self.connector.cancel();
+        if self.active || self.forwarder.is_some() || self.commands.is_some() {
+            return Err(Error::Storage("dispatcher_admission"));
+        }
+        self.journal.close_in_place()?;
+        self.startup_custody
+            .take()
+            .expect("candidate owns its account")
+            .close()
+    }
+
     fn native_group_union(&self) -> Result<Vec<GroupId>> {
         let mut groups: BTreeMap<Vec<u8>, GroupId> = BTreeMap::new();
         let live = mdk(self.runtime.live_group_ids())?;
@@ -1267,6 +1365,8 @@ impl MdkOwner {
 }
 impl Drop for MdkOwner {
     fn drop(&mut self) {
+        #[cfg(any(test, marmish_peer_receiver_candidate))]
+        drop(self.startup_custody.take());
         self.terminal_authority.retire_all();
         self.connector.cancel();
         if let Some(forwarder) = self.forwarder.take() {
@@ -3090,6 +3190,18 @@ mod terminal_enrollment_transport;
 #[cfg(test)]
 #[path = "terminal_room_fixture.rs"]
 mod terminal_room_fixture;
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[allow(
+    dead_code,
+    reason = "ordinary candidate physical cut remains unmounted"
+)]
+#[path = "mdk_owner_physical_cut.rs"]
+mod physical_cut;
 
 #[cfg(test)]
 #[path = "terminal_relay_fixture.rs"]

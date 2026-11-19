@@ -634,7 +634,7 @@ async fn serve_owner(
                     target_os = "linux",
                     target_arch = "x86_64"
                 ))]
-                None,
+                ipc::CandidateListener::default(),
             )
             .await;
         }

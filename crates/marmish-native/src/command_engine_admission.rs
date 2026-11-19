@@ -1,3 +1,4 @@
+use super::WorkerJoin;
 use crate::dispatcher_fatal::Fatal;
 #[cfg(test)]
 use crate::dispatcher_fatal::Trip;
@@ -38,9 +39,22 @@ impl Admission {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn report_test_custody_failure(&self) {
+    #[cfg(any(test, marmish_peer_receiver_candidate))]
+    pub(crate) fn report_custody_failure(&self) {
         (self.owner_failed)();
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(
+        dead_code,
+        reason = "ordinary candidate physical cut remains unmounted"
+    )]
+    pub(super) fn is_for(&self, fatal: &Fatal) -> bool {
+        self.fatal.same_lifetime(fatal)
     }
 
     pub(super) fn tripped(&self) -> bool {
@@ -61,21 +75,24 @@ impl Admission {
 /// Extracted only after the exact engine's channel endpoints are disconnected.
 pub(crate) struct FatalEngineJoin {
     worker: Option<JoinHandle<()>>,
-    failed: bool,
+    previous: WorkerJoin,
 }
 
 #[allow(dead_code, reason = "candidate engine remains unmounted")]
 impl FatalEngineJoin {
-    pub(super) fn new(worker: Option<JoinHandle<()>>, failed: bool) -> Self {
-        Self { worker, failed }
+    pub(super) fn new(worker: Option<JoinHandle<()>>, previous: WorkerJoin) -> Self {
+        Self { worker, previous }
     }
 
     pub(crate) fn wait(self) -> Result<()> {
-        let panicked = self.worker.is_some_and(|worker| worker.join().is_err());
-        if panicked || self.failed {
-            Err(Error::Storage("engine_thread_failed"))
-        } else {
+        let joined = match self.worker {
+            Some(worker) => worker.join().is_ok(),
+            None => self.previous == WorkerJoin::Joined,
+        };
+        if joined {
             Ok(())
+        } else {
+            Err(Error::Storage("engine_thread_failed"))
         }
     }
 }
@@ -106,6 +123,22 @@ impl Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fatal_join_requires_worker_or_successful_previous_join() {
+        assert!(FatalEngineJoin::new(None, WorkerJoin::Joined).wait().is_ok());
+        for outcome in [WorkerJoin::Pending, WorkerJoin::Panicked] {
+            assert!(matches!(
+                FatalEngineJoin::new(None, outcome).wait(),
+                Err(Error::Storage("engine_thread_failed"))
+            ));
+        }
+        let panicked = std::thread::spawn(|| panic!("test worker panicked"));
+        assert!(matches!(
+            FatalEngineJoin::new(Some(panicked), WorkerJoin::Pending).wait(),
+            Err(Error::Storage("engine_thread_failed"))
+        ));
+    }
 
     #[test]
     fn close_poison_notifies_only_the_original_admission_and_fatal() {
