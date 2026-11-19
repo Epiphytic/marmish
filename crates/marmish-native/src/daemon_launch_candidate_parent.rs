@@ -71,6 +71,7 @@ fn read_byte(channel: &mut UnixStream, end: Instant) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn provisional_ready_must_be_followed_by_commit() {
