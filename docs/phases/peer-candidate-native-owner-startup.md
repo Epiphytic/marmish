@@ -95,8 +95,10 @@ is a no-op in production. `AccountDeviceRuntime::open` receives
 engine construction, imported legacy retirement, and hydration are
 inside that admitted call. The existing inert transport factory is the
 test seam after the session opens and before the post-call check.
-Admit the binding check, revoked Journal conversations read,
-each group retirement, orphan reconciliation, maintenance, route
+Check admission at the binding milestone. The later daemon caller supplies
+the independent Ready profile verification through
+`ProfileLease::check_opened_binding`. Admit revoked Journal conversations
+read, each group retirement, orphan reconciliation, maintenance, route
 rebuild and invalidation reconciliation separately. Each admitted
 body can complete its synchronous nested effects. After a fatal
 return, suppress its result and refuse the next independent effect.
