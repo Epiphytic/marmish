@@ -7,7 +7,7 @@ pub(in crate::peer_invitation) mod retirement;
 
 use crate::peer_invitation::{
     socket::owner::recipient::{CheckedSavedDelivery, SavedPortWitness},
-    store::retry::{RetryFinding, Snapshot},
+    store::retry::{self, DueCoordinate, RetryFinding, Snapshot},
 };
 
 pub(in crate::peer_invitation) struct SavedDelivery {
@@ -60,6 +60,18 @@ impl PreparedSaved<'_> {
 }
 
 impl Checkpoint {
+    pub(in crate::peer_invitation) fn probe_due_installed_delivery(
+        &mut self,
+        source: &Source,
+        account: PublicKey,
+        origin: &str,
+        wall: u64,
+    ) -> Result<Option<DueCoordinate>> {
+        self.read_installed_consent(source, account, origin, wall, |tx, cx| {
+            Ok(retry::probe_due(tx, cx.origin, wall)?)
+        })
+    }
+
     pub(in crate::peer_invitation) fn due_installed_delivery(
         &mut self,
         source: &Source,
@@ -67,12 +79,29 @@ impl Checkpoint {
         origin: &str,
         wall: u64,
     ) -> Result<Option<SavedDelivery>> {
+        self.acquire_installed_delivery(source, (account, origin, wall), None, || Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn acquire_installed_delivery(
+        &mut self,
+        source: &Source,
+        route: (PublicKey, &str, u64),
+        expected: Option<DueCoordinate>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<SavedDelivery>> {
+        let (account, origin, wall) = route;
         self.check_installed_consent_scope(source, account, origin, wall)?;
         let cx = self.custody_context(source)?;
-        let due = self.cursor.due_with_fence(cx.origin, wall, |tx| {
-            cx.verify(tx, wall)?;
-            rows::advance_wall(tx, wall)
-        })?;
+        let due = self.cursor.acquire_due(
+            cx.origin,
+            wall,
+            expected,
+            |tx| {
+                cx.verify(tx, wall)?;
+                rows::advance_wall(tx, wall)
+            },
+            || before_commit().map_err(schema::cursor_error),
+        )?;
         Ok(due.map(|snapshot| SavedDelivery {
             snapshot,
             owner: cx.owner,
@@ -86,7 +115,7 @@ impl Checkpoint {
         source: &Source,
         checked: CheckedSavedDelivery<'_, 'saved>,
     ) -> Result<Option<PreparedSaved<'saved>>> {
-        self.observe_saved(source, checked, false)
+        self.observe_saved(source, checked, false, |_| Ok(()))
     }
 
     fn observe_saved<'saved>(
@@ -94,6 +123,7 @@ impl Checkpoint {
         source: &Source,
         checked: CheckedSavedDelivery<'_, 'saved>,
         retirement: bool,
+        before_retry_commit: impl FnOnce(u64) -> Result<()>,
     ) -> Result<Option<PreparedSaved<'saved>>> {
         let (saved, wall) = checked.observation();
         self.check_local_owner(&saved.owner)?;
@@ -142,8 +172,10 @@ impl Checkpoint {
             })?;
 
         if wall < expires && queued.row.ack_at.is_none() {
-            self.cursor
-                .retry_again_with_fence(&saved.snapshot, wall, |tx| {
+            self.cursor.retry_again_guarded(
+                &saved.snapshot,
+                wall,
+                |tx| {
                     cx.verify(tx, wall)?;
                     let current = cx
                         .current_delivery_consent(tx, key, &queued)
@@ -157,7 +189,9 @@ impl Checkpoint {
                         return Err(CursorError::Stale);
                     }
                     rows::advance_wall(tx, wall)
-                })?;
+                },
+                || before_retry_commit(expires).map_err(schema::cursor_error),
+            )?;
             return Ok(None);
         }
 
@@ -191,19 +225,13 @@ impl Checkpoint {
         checked: CheckedSavedDelivery<'_, '_>,
         prepared: PreparedSaved<'_>,
         measured: &MeasuredDelivery<'_>,
+        check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<Status>> {
         if checked.observation().1 >= prepared.expires {
             return Err(Error::Expired);
         }
         measured.require_turn(&prepared.turn)?;
-        // The installed Manual saved-retry turn is not mounted in this phase.
-        // Keep its existing measured native-window check and SQL behavior.
-        self.commit_saved(
-            source,
-            checked,
-            prepared,
-            Native::Managed(measured, &|| Ok(())),
-        )
+        self.commit_saved(source, checked, prepared, Native::Managed(measured, check))
     }
 
     fn commit_saved(

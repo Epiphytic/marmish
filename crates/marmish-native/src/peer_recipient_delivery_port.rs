@@ -101,6 +101,10 @@ impl<'route, 'turn> CheckedDeliveryRoute<'route, 'turn> {
         &self.route
     }
 
+    pub(in crate::peer_invitation) fn challenge_deadline(&self) -> u64 {
+        self.challenge.deadline()
+    }
+
     pub(in crate::peer_invitation) fn into_parts(
         self,
     ) -> (

@@ -19,7 +19,7 @@ use crate::{
 use super::*;
 
 #[derive(Clone)]
-pub(crate) struct NativeWindow(Arc<Window>);
+pub(crate) struct NativeWindow(Arc<Window>, Option<Duration>);
 
 struct Window {
     readiness: Readiness,
@@ -192,29 +192,32 @@ impl NativeWindow {
             .wall
             .checked_sub(now.wall.max(projected))
             .ok_or(Error::Clock)?;
-        let window = Self(Arc::new(Window {
-            readiness,
-            stop,
-            anchor,
-            ceiling,
-            tick_end: now
-                .tick
-                .checked_add(remaining.min(limit))
-                .ok_or(Error::Clock)?,
-            floor: Mutex::new(Some(floor)),
-            #[cfg(test)]
-            stop_after_signing: AtomicBool::new(false),
-            #[cfg(test)]
-            signs: AtomicUsize::new(0),
-            #[cfg(test)]
-            copy_cut: AtomicUsize::new(0),
-            #[cfg(test)]
-            trace_timing: AtomicBool::new(false),
-            #[cfg(test)]
-            crash_generation: AtomicBool::new(false),
-            #[cfg(test)]
-            expire_schema: AtomicBool::new(false),
-        }));
+        let window = Self(
+            Arc::new(Window {
+                readiness,
+                stop,
+                anchor,
+                ceiling,
+                tick_end: now
+                    .tick
+                    .checked_add(remaining.min(limit))
+                    .ok_or(Error::Clock)?,
+                floor: Mutex::new(Some(floor)),
+                #[cfg(test)]
+                stop_after_signing: AtomicBool::new(false),
+                #[cfg(test)]
+                signs: AtomicUsize::new(0),
+                #[cfg(test)]
+                copy_cut: AtomicUsize::new(0),
+                #[cfg(test)]
+                trace_timing: AtomicBool::new(false),
+                #[cfg(test)]
+                crash_generation: AtomicBool::new(false),
+                #[cfg(test)]
+                expire_schema: AtomicBool::new(false),
+            }),
+            None,
+        );
         window.sample()?;
         Ok(window)
     }
@@ -235,6 +238,9 @@ impl NativeWindow {
     }
 
     pub(super) fn schema_turn(&self) -> Result<SchemaWindow> {
+        if self.1.is_some() {
+            return Err(Error::Binding);
+        }
         let window = self.next(Duration::from_secs(15))?;
         #[cfg(test)]
         window.0.expire_schema.store(
@@ -271,13 +277,27 @@ impl NativeWindow {
         Ok(wall)
     }
 
+    /// Narrow the wall ceiling without restarting the visit's elapsed clock.
+    pub(super) fn clamp_signed(&self, exclusive: u64) -> Result<Self> {
+        let ceiling = Duration::from_secs(exclusive).min(self.wall_ceiling());
+        let window = Self(Arc::clone(&self.0), Some(ceiling));
+        window.sample()?;
+        Ok(window)
+    }
+
+    fn wall_ceiling(&self) -> Duration {
+        self.1.unwrap_or(self.0.ceiling.wall)
+    }
+
     pub(super) fn sample(&self) -> Result<Duration> {
         self.checked_sample().map(|(wall, _)| wall)
     }
 
     pub(in crate::peer_invitation) fn remaining(&self) -> Result<Duration> {
-        let (_, tick) = self.checked_sample()?;
-        self.0.tick_end.checked_sub(tick).ok_or(Error::Clock)
+        let (wall, tick) = self.checked_sample()?;
+        let elapsed_remaining = self.0.tick_end.checked_sub(tick).ok_or(Error::Clock)?;
+        let wall_remaining = self.wall_ceiling().checked_sub(wall).ok_or(Error::Clock)?;
+        Ok(elapsed_remaining.min(wall_remaining))
     }
 
     fn checked_sample(&self) -> Result<(Duration, Duration)> {
@@ -286,11 +306,14 @@ impl NativeWindow {
         let now = Sample::now()?;
         let wall = self.observe(now, previous)?;
         *floor = Some(now);
+        if wall >= self.wall_ceiling() {
+            return Err(Error::Clock);
+        }
         Ok((wall, now.tick))
     }
 
     pub(super) fn require_offer_limit(&self, offer_expires: u64) -> Result<()> {
-        if self.0.ceiling.wall > Duration::from_secs(offer_expires) {
+        if self.wall_ceiling() > Duration::from_secs(offer_expires) {
             return Err(Error::Clock);
         }
         self.sample()?;

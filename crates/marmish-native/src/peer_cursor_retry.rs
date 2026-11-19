@@ -33,6 +33,36 @@ impl Metadata {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DueCoordinate {
+    origin: Origin,
+    id: EventId,
+    revision: i64,
+    digest: [u8; 32],
+}
+
+impl DueCoordinate {
+    fn matches(&self, snapshot: &Snapshot) -> bool {
+        self.origin == snapshot.origin
+            && self.id == snapshot.id
+            && self.revision == snapshot.revision
+            && self.digest == snapshot.record().digest()
+    }
+}
+
+pub(crate) fn probe_due(
+    tx: &Transaction<'_>,
+    origin: Origin,
+    wall: u64,
+) -> Result<Option<DueCoordinate>> {
+    Ok(due_head(tx, origin, wall)?.map(|snapshot| DueCoordinate {
+        origin,
+        id: snapshot.id,
+        revision: snapshot.revision,
+        digest: snapshot.record().digest(),
+    }))
+}
+
 pub(crate) struct Snapshot {
     pub(crate) origin: Origin,
     id: EventId,
@@ -366,15 +396,27 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<Option<Snapshot>> {
+        self.acquire_due(origin, wall, None, fence, || Ok(()))
+    }
+
+    pub(crate) fn acquire_due(
+        &mut self,
+        origin: Origin,
+        wall: u64,
+        expected: Option<DueCoordinate>,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Option<Snapshot>> {
         let tx = self.with_wall(origin, wall)?;
-        let snapshot = tx.query_row(
-            "SELECT id, stamp, frame, auth, expires, prerequisite, retry_at, step, revision
-             FROM peer_cursor_deferred WHERE origin=?1 AND retry_at<=?2 ORDER BY retry_at,id LIMIT 1",
-            params![origin, seconds(wall)?],
-            |row| read_snapshot(origin, row),
-        ).optional()?;
-        // Even an empty acquisition persists the cursor wall on success.
+        let snapshot = due_head(&tx, origin, wall)?;
+        if expected
+            .is_some_and(|expected| !snapshot.as_ref().is_some_and(|head| expected.matches(head)))
+        {
+            return Err(Error::Stale);
+        }
+        // Even an empty legacy acquisition persists the cursor wall on success.
         fence(&tx)?;
+        before_commit()?;
         tx.commit()?;
         Ok(snapshot)
     }
@@ -389,6 +431,16 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<()> {
+        self.retry_again_guarded(snapshot, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn retry_again_guarded(
+        &mut self,
+        snapshot: &Snapshot,
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let tx = self.with_wall(snapshot.origin, wall)?;
         if snapshot.retry_at > wall || !record_matches(&tx, snapshot)? {
             return Err(Error::Stale);
@@ -399,6 +451,7 @@ impl CursorStore {
             "UPDATE peer_cursor_deferred SET retry_at=?3, step=?4, revision=?5 WHERE origin=?1 AND id=?2",
             params![snapshot.origin, snapshot.id, after(wall, BACKOFF[step])?, i64::try_from(step).map_err(|_| Error::Range)?, next_revision(&tx, snapshot.origin)?],
         )?;
+        before_commit()?;
         tx.commit()?;
         Ok(())
     }
@@ -557,6 +610,17 @@ fn read_snapshot(origin: Origin, row: &rusqlite::Row<'_>) -> rusqlite::Result<Sn
         step,
         revision: row.get(8)?,
     })
+}
+
+fn due_head(tx: &Transaction<'_>, origin: Origin, wall: u64) -> Result<Option<Snapshot>> {
+    Ok(tx
+        .query_row(
+            "SELECT id, stamp, frame, auth, expires, prerequisite, retry_at, step, revision
+         FROM peer_cursor_deferred WHERE origin=?1 AND retry_at<=?2 ORDER BY retry_at,id LIMIT 1",
+            params![origin, seconds(wall)?],
+            |row| read_snapshot(origin, row),
+        )
+        .optional()?)
 }
 
 fn load(tx: &Transaction<'_>, origin: Origin, id: EventId) -> Result<Option<Snapshot>> {

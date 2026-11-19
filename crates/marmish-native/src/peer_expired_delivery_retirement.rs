@@ -94,15 +94,26 @@ impl Checkpoint {
         source: &Source,
         checked: CheckedSavedDelivery<'_, 'saved>,
     ) -> Result<ManagedSaved<'saved>> {
+        self.observe_managed_saved_guarded(source, checked, |_| Ok(()))
+    }
+
+    pub(in crate::peer_invitation) fn observe_managed_saved_guarded<'saved>(
+        &mut self,
+        source: &Source,
+        checked: CheckedSavedDelivery<'_, 'saved>,
+        before_retry_commit: impl FnOnce(u64) -> Result<()>,
+    ) -> Result<ManagedSaved<'saved>> {
         let (_, observed_at) = checked.observation();
-        Ok(match self.observe_saved(source, checked, true)? {
-            Some(prior) if observed_at >= prior.expires => {
-                self.require_retirement_policy(Selector::from_delivery(&prior.incoming))?;
-                ManagedSaved::Expired(ExpiredSaved { prior, observed_at })
-            }
-            Some(prior) => ManagedSaved::Live(prior),
-            None => ManagedSaved::Waiting,
-        })
+        Ok(
+            match self.observe_saved(source, checked, true, before_retry_commit)? {
+                Some(prior) if observed_at >= prior.expires => {
+                    self.require_retirement_policy(Selector::from_delivery(&prior.incoming))?;
+                    ManagedSaved::Expired(ExpiredSaved { prior, observed_at })
+                }
+                Some(prior) => ManagedSaved::Live(prior),
+                None => ManagedSaved::Waiting,
+            },
+        )
     }
 
     pub(in crate::peer_invitation) fn verify_retirement<'saved>(
@@ -163,7 +174,7 @@ impl Checkpoint {
         verified: VerifiedRetirement<'_>,
         window: &NativeWindow,
         cursor_file: &CheckedFile,
-        #[cfg(test)] before_commit: impl FnOnce(),
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let VerifiedRetirement {
             saved,
@@ -200,8 +211,7 @@ impl Checkpoint {
                 rows::advance_wall(tx, wall)
             },
             || {
-                #[cfg(test)]
-                before_commit();
+                before_commit().map_err(schema::cursor_error)?;
                 cursor_file
                     .unchanged_identity()
                     .map_err(|_| CursorError::Binding)?;

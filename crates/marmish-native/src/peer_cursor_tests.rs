@@ -634,6 +634,82 @@ fn peer_cursor_page_owner_fence_rolls_back_and_precedes_quarantine() {
 }
 
 #[test]
+fn saved_delivery_final_refusals_rollback_both_floors_and_exact_row() {
+    let fixture = Fixture::new();
+    let mut store = fixture.open();
+    begin(&mut store, A, W);
+    owner_wall_table(&store);
+    let raw = record(2, W);
+    let binding = id(9);
+    let metadata = metadata(Auth::FlightVerified, Some(binding));
+    store
+        .defer_with_fence(A, raw, metadata, W, |tx| advance_owner_wall(tx, W))
+        .unwrap();
+    let wall = W + 1;
+    let probe = |store: &mut CursorStore, wall| {
+        retry::probe_due(&store.conn.transaction().unwrap(), A, wall).unwrap()
+    };
+    let coordinate = probe(&mut store, wall).unwrap();
+    assert_walls(&store, W);
+
+    let final_refusal = || Err(Error::Binding);
+    let advance = |tx: &Transaction<'_>| advance_owner_wall(tx, wall);
+    assert_eq!(
+        store
+            .acquire_due(A, wall, Some(coordinate), advance, final_refusal)
+            .err(),
+        Some(Error::Binding)
+    );
+    assert_walls(&store, W);
+    assert_eq!(probe(&mut store, wall), Some(coordinate));
+
+    let snapshot = store.existing(A, raw.id).unwrap().unwrap();
+    assert_eq!(
+        store.retry_again_guarded(&snapshot, wall, advance, final_refusal),
+        Err(Error::Binding)
+    );
+    assert_walls(&store, W);
+    assert_eq!(probe(&mut store, wall), Some(coordinate));
+    let unchanged = store.existing(A, raw.id).unwrap().unwrap();
+    assert_eq!(unchanged.record().bytes, raw.bytes);
+    assert_eq!(unchanged.record().stamp, raw.stamp);
+    assert_eq!(unchanged.metadata, metadata);
+    assert_eq!(unchanged.retry_at, wall);
+
+    // A new row with the same due time but an earlier ID replaces the head.
+    let first = record(1, W);
+    store.defer(A, first, metadata, W).unwrap();
+    let current = probe(&mut store, wall).unwrap();
+    assert_ne!(current, coordinate);
+    let refuse_if_reached = |_: &Transaction<'_>| panic!("stale head must precede owner writes");
+    assert_eq!(
+        store
+            .acquire_due(A, wall, Some(coordinate), refuse_if_reached, || Ok(()))
+            .err(),
+        Some(Error::Stale)
+    );
+    assert_walls(&store, W);
+
+    // A gone head cannot fall through to the next row or an empty acquisition.
+    store.commit_invalid(A, first, W).unwrap();
+    assert_eq!(
+        store
+            .acquire_due(A, wall, Some(current), refuse_if_reached, || Ok(()))
+            .err(),
+        Some(Error::Stale)
+    );
+    store.commit_invalid(A, raw, W).unwrap();
+    assert_eq!(probe(&mut store, wall), None);
+    assert_eq!(
+        store
+            .acquire_due(A, wall, Some(coordinate), refuse_if_reached, || Ok(()))
+            .err(),
+        Some(Error::Stale)
+    );
+    assert_walls(&store, W);
+}
+
+#[test]
 fn peer_cursor_retry_owner_fences_preserve_exact_rows_on_refusal() {
     let fixture = Fixture::new();
     let mut store = fixture.open();
