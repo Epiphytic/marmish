@@ -126,6 +126,30 @@ pub(crate) struct DispatcherConnection {
     pub(crate) key_package: bool,
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub(crate) struct DispatcherTranscript(Arc<Mutex<State>>);
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl DispatcherTranscript {
+    pub(crate) fn connections(&self) -> BTreeMap<usize, DispatcherConnection> {
+        self.0
+            .lock()
+            .unwrap()
+            .dispatcher_connections
+            .as_ref()
+            .unwrap()
+            .clone()
+    }
+}
+
 #[derive(Default)]
 struct State {
     mode: Mode,
@@ -1125,14 +1149,8 @@ impl Relay {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    pub(crate) fn dispatcher_connections(&self) -> BTreeMap<usize, DispatcherConnection> {
-        self.state
-            .lock()
-            .unwrap()
-            .dispatcher_connections
-            .as_ref()
-            .unwrap()
-            .clone()
+    pub(crate) fn dispatcher_transcript(&self) -> DispatcherTranscript {
+        DispatcherTranscript(self.state.clone())
     }
 
     pub(crate) fn qualification_connections(&self) -> usize {

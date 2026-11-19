@@ -40,9 +40,9 @@ impl Image {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(root)?;
-        check_directory(&directory)?;
+        let root_pin = pin(&check_directory(&directory)?);
         let command = open_at(&directory, c"commands", libc::O_DIRECTORY)?;
-        check_directory(&command)?;
+        let command_pin = pin(&check_directory(&command)?);
         let mut image = Vec::with_capacity(12 * 58);
         let mut budget = IMAGE_CAP;
         for (index, (names, dir)) in FILES
@@ -101,8 +101,8 @@ impl Image {
             .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
             .open(root)?;
         let current_command = open_at(&current, c"commands", libc::O_DIRECTORY)?;
-        if pin(&current.metadata()?) != pin(&directory.metadata()?)
-            || pin(&current_command.metadata()?) != pin(&command.metadata()?)
+        if pin(&check_directory(&current)?) != root_pin
+            || pin(&check_directory(&current_command)?) != command_pin
         {
             return Err(invalid());
         }
@@ -142,7 +142,7 @@ fn open_at(dir: &File, path: &CStr, flags: libc::c_int) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn check_directory(dir: &File) -> io::Result<()> {
+fn check_directory(dir: &File) -> io::Result<Metadata> {
     let metadata = dir.metadata()?;
     // SAFETY: geteuid has no preconditions.
     if !metadata.is_dir()
@@ -151,7 +151,7 @@ fn check_directory(dir: &File) -> io::Result<()> {
     {
         return Err(invalid());
     }
-    Ok(())
+    Ok(metadata)
 }
 
 fn checked_file(file: &File) -> io::Result<Metadata> {

@@ -12,10 +12,10 @@ use crate::{
 use std::{
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions, Permissions},
-    io::{self, Read, Seek, Write},
+    io::{self, Write},
     os::{
         fd::OwnedFd,
-        unix::fs::{OpenOptionsExt, PermissionsExt},
+        unix::fs::{FileExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     process::{Child, ExitStatus},
@@ -172,22 +172,28 @@ fn checked_daemon(exe: &Path) -> PathBuf {
     daemon
 }
 
-fn log_has_fatal_stop(mut log: File) {
-    log.rewind().unwrap();
-    let mut output = String::new();
-    log.take(128 * 1024).read_to_string(&mut output).unwrap();
+fn child_diagnostics(log: &File) -> Vec<serde_json::Value> {
+    let mut bytes = vec![0; 128 * 1024];
+    let len = log.read_at(&mut bytes, 0).unwrap();
+    bytes.truncate(len);
+    bytes
+        .split(|&byte| byte == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect()
+}
+
+fn log_has_fatal_stop(log: &File) {
     assert!(
-        output
-            .lines()
-            .any(|line| serde_json::from_str::<serde_json::Value>(line)
-                .ok()
-                .is_some_and(|entry| entry["stage"] == "registered_shutdown"
-                    && entry["category"] == "owned_stop_failed")),
+        child_diagnostics(log).iter().any(|entry| {
+            entry["stage"] == "registered_shutdown" && entry["category"] == "owned_stop_failed"
+        }),
         "actual fatal owner category"
     );
 }
 
-const CHILD_SELECTOR: &str = super::SELECTOR;
+fn child_selector() -> &'static str {
+    super::SELECTOR.split_once("::").unwrap().1
+}
 
 async fn scenario(case: Scenario) {
     let started = Instant::now();
@@ -229,9 +235,12 @@ async fn scenario(case: Scenario) {
         .unwrap();
     peer.record_dispatcher_connections().await;
     ordinary.record_dispatcher_connections().await;
+    let ordinary_transcript = ordinary.dispatcher_transcript();
+    let peer_transcript = peer.dispatcher_transcript();
+    let report_transcript = ordinary.dispatcher_transcript();
     let (mut controller, controlled) = UnixStream::pair().unwrap();
     let log = tempfile::tempfile_in(private.path()).unwrap();
-    let args = ["--ignored", "--exact", "--nocapture", CHILD_SELECTOR].map(OsString::from);
+    let args = ["--ignored", "--exact", "--nocapture", child_selector()].map(OsString::from);
     let (child, report) = candidate_parent::spawn_fault_fixture(
         &executable,
         &args,
@@ -261,14 +270,25 @@ async fn scenario(case: Scenario) {
     let mut controller = AsyncUnixStream::from_std(controller).unwrap();
     let report = tokio::task::spawn_blocking(move || {
         let mut edges = Vec::with_capacity(3);
+        let mut prior = None;
+        let mut ack = None;
         let result = candidate_parent::observe_fault_report(report, deadline.into_std(), |edge| {
-            edges.push(edge)
+            match edge {
+                ReportEdge::Ready => prior = Some(report_transcript.connections()),
+                ReportEdge::Ack => ack = Some(Instant::now()),
+                ReportEdge::PostAckClosed => assert!(
+                    ack.expect("original report parser sent A").elapsed() < super::BOOT,
+                    "no C before the original acknowledgement deadline"
+                ),
+                ReportEdge::Commit => {}
+            }
+            edges.push(edge);
         });
-        (result, edges)
+        (result, edges, prior)
     });
 
-    let (result, edges) = report.await.expect("real startup parser joined");
-    let (stale, cut_end) = match case {
+    let (result, edges, prior) = report.await.expect("real startup parser joined");
+    let (stale, cut_end, observed) = match case {
         Scenario::Status => {
             assert!(result.is_ok());
             assert_eq!(
@@ -281,11 +301,12 @@ async fn scenario(case: Scenario) {
                 .await
                 .unwrap()
                 .unwrap();
+            let observed = ordinary_transcript.connections();
             timeout_at(end, ipc::send_fault_fixture_status(&mut status))
                 .await
                 .unwrap()
                 .unwrap();
-            (Some(status), end)
+            (Some(status), end, observed)
         }
         Scenario::Ready => {
             assert!(result.is_err());
@@ -297,16 +318,16 @@ async fn scenario(case: Scenario) {
                     ReportEdge::PostAckClosed
                 ]
             );
-            (None, deadline)
+            (None, deadline, prior.expect("ordinary sockets before A"))
         }
     };
     let sampled = frame(&mut controller, b'S', 1024, cut_end).await;
     assert_eq!(sampled.first().copied(), Some(case as u8));
-    let observed = ordinary.dispatcher_connections();
+    assert_eq!(ordinary_transcript.connections(), observed);
     assert!(!observed.is_empty() && observed.values().all(|socket| socket.peer_port != 0));
     assert!(observed.values().any(|socket| socket.key_package));
     assert!(observed.values().any(|socket| socket.subscription));
-    assert!(peer.dispatcher_connections().is_empty());
+    assert!(peer_transcript.connections().is_empty());
     if let Some(mut status) = stale {
         no_response(&mut status, cut_end).await;
         fresh_refused(&socket, cut_end).await;
@@ -324,14 +345,14 @@ async fn scenario(case: Scenario) {
     })
     .await
     .expect("every owned ordinary relay connection closed");
-    assert_eq!(ordinary.dispatcher_connections(), observed);
-    assert!(peer.dispatcher_connections().is_empty());
+    assert_eq!(ordinary_transcript.connections(), observed);
+    assert!(peer_transcript.connections().is_empty());
     assert!(matches!(
         ProfileLease::acquire_ready(state.path(), PROFILE),
         Err(crate::Error::Identity("profile_in_use"))
     ));
     assert_image(&root, &sampled[1..]);
-    log_has_fatal_stop(log);
+    log_has_fatal_stop(&log);
     timeout_at(pause, async {
         use tokio::io::AsyncWriteExt;
         controller.write_all(&[b'G', 0, 0, 0, 0]).await.unwrap();
@@ -348,8 +369,8 @@ async fn scenario(case: Scenario) {
     // SAFETY: zero-signal probe of the fresh private process group after reap.
     assert_eq!(unsafe { libc::kill(-pid, 0) }, -1);
     assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
-    assert!(peer.dispatcher_connections().is_empty());
-    assert_eq!(ordinary.dispatcher_connections(), observed);
+    assert!(peer_transcript.connections().is_empty());
+    assert_eq!(ordinary_transcript.connections(), observed);
     assert_image(&root, &sampled[1..]);
 
     reopen(&ordinary, state.path(), &daemon, account).await;
@@ -363,11 +384,11 @@ async fn scenario(case: Scenario) {
 
 async fn reopen(relay: &Relay, state: &Path, daemon: &Path, account: nostr::key::PublicKey) {
     let mut lease = ProfileLease::acquire_ready(state, PROFILE).expect("reacquire after reap");
-    let helper = crate::native_layout::resolve(daemon).unwrap().helper;
+    let layout = crate::native_layout::resolve(daemon).unwrap();
     let material = lease
         .prepare(
             crate::identity::BackendChoice::File,
-            &helper,
+            &layout.helper,
             std::time::Instant::now() + STATUS,
         )
         .unwrap();
@@ -388,7 +409,7 @@ async fn reopen(relay: &Relay, state: &Path, daemon: &Path, account: nostr::key:
         .expect("stock owner close");
     let account = account.to_bytes();
     let policy = config
-        .engine_policy(lease.root().join("commands"), helper, account, &[])
+        .engine_policy(lease.root().join("commands"), layout.worker, account, &[])
         .unwrap()
         .unwrap();
     let secret =
