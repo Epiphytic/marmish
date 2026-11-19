@@ -21,3 +21,11 @@ floor on refusal. Existing fixture retirement remains available on its own path.
 
 The review suggested retaining finer internal causes from the native window.
 The leaf keeps the existing closed expiry category for that failed fence.
+
+Claude Code Auto approved the composition at `f9bc0ff` on the retained
+Command base in session `201c6824-50a7-48af-baae-39240b0c60b4`. It verified
+identical stable patch IDs, disjoint changed files, a current port and
+quota during attestation, and all four exact before-commit guards. There
+were no source blockers for publishing this integration. The expired
+Deferred gate remains required before enabling the scheduler. Subsequent
+author results for the composed source are in the validation report.

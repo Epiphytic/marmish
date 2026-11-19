@@ -42,6 +42,17 @@ Delivery package read and Held commit are covered by the positive case
 assertions. They are outside that timing sample. These local debug-profile
 observations include injected waits in the rollback and loss cases.
 
+## Retained Command composition
+
+The composed source at `f9bc0ff` passed the candidate libtest link,
+strict all-target Clippy (31.20 s), and the complete suite of seven
+private WSS scenarios (119.49 s). The positive Consent and wake turn
+took 578.915 ms and the wake rollback took 923.570 ms. The lost-ACK
+case included its injected five-second wait. The replay onto the
+published retained Command proof preserves the reviewed native source
+byte for byte. This is a same-owner fixture, with mounted daemon and
+public-relay validation still pending.
+
 ## Reproduce
 
 Set `MARMISH_BUILD_COMMIT` to the exact source SHA and run with the locked
