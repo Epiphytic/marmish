@@ -192,32 +192,30 @@ impl NativeWindow {
             .wall
             .checked_sub(now.wall.max(projected))
             .ok_or(Error::Clock)?;
-        let window = Self(
-            Arc::new(Window {
-                readiness,
-                stop,
-                anchor,
-                ceiling,
-                tick_end: now
-                    .tick
-                    .checked_add(remaining.min(limit))
-                    .ok_or(Error::Clock)?,
-                floor: Mutex::new(Some(floor)),
-                #[cfg(test)]
-                stop_after_signing: AtomicBool::new(false),
-                #[cfg(test)]
-                signs: AtomicUsize::new(0),
-                #[cfg(test)]
-                copy_cut: AtomicUsize::new(0),
-                #[cfg(test)]
-                trace_timing: AtomicBool::new(false),
-                #[cfg(test)]
-                crash_generation: AtomicBool::new(false),
-                #[cfg(test)]
-                expire_schema: AtomicBool::new(false),
-            }),
-            None,
-        );
+        let state = Window {
+            readiness,
+            stop,
+            anchor,
+            ceiling,
+            tick_end: now
+                .tick
+                .checked_add(remaining.min(limit))
+                .ok_or(Error::Clock)?,
+            floor: Mutex::new(Some(floor)),
+            #[cfg(test)]
+            stop_after_signing: AtomicBool::new(false),
+            #[cfg(test)]
+            signs: AtomicUsize::new(0),
+            #[cfg(test)]
+            copy_cut: AtomicUsize::new(0),
+            #[cfg(test)]
+            trace_timing: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_generation: AtomicBool::new(false),
+            #[cfg(test)]
+            expire_schema: AtomicBool::new(false),
+        };
+        let window = Self(Arc::new(state), None);
         window.sample()?;
         Ok(window)
     }
@@ -322,7 +320,7 @@ impl NativeWindow {
 
     #[cfg(test)]
     pub(crate) fn test_end_exclusive(&self) -> Duration {
-        self.0.ceiling.wall
+        self.wall_ceiling()
     }
 
     #[cfg(test)]
@@ -474,5 +472,40 @@ impl NativeFence<'_> {
 impl<'a> From<&'a TurnFence<'a>> for NativeFence<'a> {
     fn from(value: &'a TurnFence<'a>) -> Self {
         Self::Fixture(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_delivery_cutoff_shares_elapsed_window_and_cannot_restart_it() {
+        let (startup, listener, _worker) = crate::peer_candidate_startup::pair();
+        let stop = Arc::new(AtomicBool::new(false));
+        startup.ordinary_ready();
+        listener.registered();
+        let wall = Duration::from_secs(10_000);
+        fixture_retirement_wall(wall, || {
+            let window = NativeWindow::start(
+                listener.readiness(),
+                Arc::clone(&stop),
+                CancellationToken::new(),
+                wall,
+                wall.as_secs() + 60,
+            )
+            .unwrap();
+            let narrowed = window.clamp_signed(wall.as_secs() + 1).unwrap();
+            assert!(Arc::ptr_eq(&window.0, &narrowed.0));
+            assert!(narrowed.remaining().unwrap() <= Duration::from_secs(1));
+            assert!(matches!(narrowed.schema_turn(), Err(Error::Binding)));
+            assert!(matches!(
+                window.clamp_signed(wall.as_secs()),
+                Err(Error::Clock)
+            ));
+            assert!(window.sample().is_ok());
+            stop.store(true, Ordering::Release);
+            assert!(matches!(narrowed.sample(), Err(Error::Clock)));
+        });
     }
 }
