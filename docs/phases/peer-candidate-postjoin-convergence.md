@@ -133,7 +133,8 @@ Extract a small bounded Group parser from `peer_raw_socket_group.rs` so the live
 candidate never imports `terminal_relay_fixture::GroupFingerprint` or its
 transcript. Bind the checked private connection, incarnation, current account,
 single kind 445 `#h` route and expected group, finite frames/bytes/deadline and
-exact correlation. One history request ends at matching EOSE. Feed only the
+exact correlation. One history request starts only after retaining Baseline
+and ends at matching EOSE. Feed only the
 exact checked signed SelfUpdate named by Baseline once, and confirm its
 native transition from Welcome to the asserted source. Require the raw
 history event ID and signed-byte digest, no changed route, contradictory
@@ -168,8 +169,9 @@ abandon an externally delivered commit later. Closed authenticated readback
 checks the exact single own-leaf obligation, native pending reference,
 semantic evolution, frozen fanout, endpoint, required acknowledgement and
 canonical signed bytes. The adapter denies and counts the separately typed
-known KeyPackage publisher call, with no egress, app effect or unsettled
-native work authorized by that call. Any other transport request, second
+known KeyPackage publisher calls, bounded per maintenance sweep, with no
+egress or app effect. Preserve the adapter's default no-op
+`commit_size_refusals` inspection. Any other transport request, second
 Group request, pending poll, late result or shape drift fails qualification.
 
 First capture consumes one negative native attempt. Native attempts are
@@ -227,8 +229,11 @@ outer ID, semantic obligation, pending/evolution identity, stage and target.
 Use native durable fanout as byte authority. Compare the full normalized
 request whenever arming a new physical attempt. A fresh sole owner with the
 same durable generation and independently verified original may reconstruct
-one candidate after a cut before capture. An unmatched NativeStarted state
-never authorizes new history input, another rotation or another stage.
+one candidate after a cut before capture only from cold durable evidence of
+the exact first recorded `PossiblyExposed` outcome, its candidate and its
+bounded due time. Read the target state and attempt count before any resumed
+maintenance or fanout call. An unmatched NativeStarted state never authorizes
+new history input, another rotation or another stage.
 
 Arm one send before opening its physical aperture. Preserve attempt number,
 time, current route scope and exact candidate. A lost positive result or
@@ -236,8 +241,10 @@ interruption after Arm is potentially exposed. Only after current cold
 readback and the exact authenticated Converged assertion may an Uncertain
 candidate retry once, using identical bytes and signed outer ID, following
 native due time and current qualification. Never recreate a candidate. Exact
-checked relay ACK permits one native settlement, under a freshly verified
-same attempt. It does not itself confirm local PostJoin. If closed native
+checked relay ACK recorded against the exact physical attempt permits one
+native settlement, under a freshly verified same attempt. The durable record
+distinguishes the exact ACK from an unresolved physical attempt. The ACK
+does not itself confirm local PostJoin. If closed native
 state already proves stable completion at the exact target with the exact
 confirmed evolution's signed message ID and matching Converged assertion, record
 confirmation without retransmission. Persist applicable current wall floors
@@ -248,6 +255,19 @@ It ends at cutoff with unchanged charged Activating custody. A cut after
 physical delivery can progress only when Converged and current exact
 recovery checks supply authority.
 
+MDK persists `Attempting` before invoking an adapter and treats that state
+as immediately due on reopen. For either a capture or a settlement cut, a
+cold `Attempting` target or a recorded native attempt without its outcome
+ends this generation's PostJoin work with charged Activating custody. Fence
+before any resumed native publish, physical arming or new maintenance.
+This also applies when a matching physical ACK was already recorded and
+the interrupted settlement outcome is unresolved. Keep the ACK for evidence
+and give it no second settlement authority in this phase. A fully persisted
+stable native confirmation follows the exact read-only completion path above.
+If the locked APIs cannot distinguish the durable attempt and outcome,
+refuse that recovery case. These rules preserve the single negative native
+attempt and avoid relying on an immediately due implicit resend.
+
 The custody row remains Manual Activating before and after confirmation. No
 Active transition, acceptance receipt, room descriptor, status subscription,
 new heartbeat, remote command permission, deletion or quota release. Keep
@@ -255,7 +275,9 @@ selector/read projections and same-UID approval reply semantics unchanged.
 
 ## Validation and implementation boundaries
 
-1. Qualify canonical assertions and founder native issuer, distinct v4
+1. Start with the
+   [closed native split proof](peer-postjoin-closed-native-split.md).
+   Qualify canonical assertions and founder native issuer, distinct v4
    attachment and exact journal/restart decisions, separately metered readback,
    and both halves of the one-poll native publication split. Use deterministic
    codec, SQLCipher, live-fence and ownership tests plus isolated real MDK.
@@ -275,8 +297,11 @@ Activating with durable PostJoin confirmation and equal independently
 witnessed native pins, one founder update and one recipient send. For lost
 ACK prove exact single optional retry, two identical recipient sends at most,
 and eventual stable completion. Exercise separate closed-owner process cuts
-after approval, after native freeze before capture, after Arm, and after
-native confirmation before the local journal; check no duplicate native
+after approval, after the first native outcome is durable but before the
+local Captured row, during native capture and settlement with unresolved
+`Attempting`, after Arm, and after native confirmation before the local
+journal. Check the mid-turn refusal leaves the exact charge intact and
+creates no second native attempt. Check no duplicate native
 operation or further write after cold completion. A relay withholding a
 reply stays private to the test. No fault injection switch in installed
 binaries.
