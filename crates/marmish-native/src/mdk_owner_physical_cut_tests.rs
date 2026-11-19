@@ -213,7 +213,7 @@ async fn cached_cut_handles_survive_cancelled_observation_and_failed_join() {
     let abort = forwarder.abort_handle();
     owner.forwarder = Some(forwarder);
     trip.trip();
-    let mut cut = PhysicalCut::begin(owner, &fixture.lease).ok().unwrap();
+    let cut = PhysicalCut::begin(owner, &fixture.lease).ok().unwrap();
     let mut cut = cut.finish().err().unwrap();
     let Fixture {
         directory, lease, ..
@@ -435,6 +435,9 @@ async fn private_wss() {
     assert_eq!(binding.fence.state(), FenceState::Live);
 
     let journal = fixture.lease.journal_database().to_owned();
+    let mdk = fixture.lease.mdk_database().to_owned();
+    let before_mdk = database_bytes(&mdk);
+    assert!(before_mdk[0].is_some());
     let before = database_bytes(&journal);
     assert!(before[0].is_some());
     let transcript = || {
@@ -471,6 +474,7 @@ async fn private_wss() {
     assert_eq!(relay.runtime_socket_end(socket), Some(SocketEnd::Raw));
     assert_eq!(transcript(), before_transcript);
     assert!(database_bytes(&journal) == before);
+    assert!(database_bytes(&mdk) == before_mdk);
     assert_eq!(cut.observe(deadline()).await, report);
     let (parked, _) = cut.finish().ok().unwrap();
     assert_held(directory.path());
