@@ -845,3 +845,166 @@ async fn healthy_owned_stop_rechecks_sticky_cut_during_graceful_preparation() {
             .is_err()
     );
 }
+
+async fn wait_for_idle_engine(owner: &mut MdkOwner) {
+    until(|| {
+        owner
+            .commands
+            .as_mut()
+            .unwrap()
+            .engine_mut()
+            .unwrap()
+            .readiness()
+            == Readiness::Ready
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn registered_idle_prelude_quiesces_real_engine_before_runtime_cleanup() {
+    use crate::mdk_adapter::healthy_stop::RegisteredStop;
+    let fixture = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let admission = Admission::new(&trip, || true);
+    let mut owner = open_healthy(&fixture, &trip, &admission);
+    let client = Keys::generate().public_key().to_bytes();
+    fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
+    wait_for_idle_engine(&mut owner).await;
+    let binding = owner
+        .terminal_authority
+        .register(AuthenticatedCommandContext::test_fixture(
+            fixture.material.public_key().to_bytes(),
+            client,
+            vec![3; 32],
+            [2; 16],
+            CommandDirection::Server,
+        ))
+        .unwrap();
+    let began = Instant::now();
+    let mut stop = RegisteredStop::begin(owner, &fixture.lease, &admission, began, true)
+        .ok()
+        .expect("registered owner");
+    assert_eq!(binding.fence.state(), FenceState::Retired);
+    let report = stop.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(report.graceful_complete && !report.fatal);
+    assert!(stop.complete(|| fixture.lease.cleanup_runtime()).is_ok());
+    assert_eq!(Arc::strong_count(&fixture.lease), 1);
+    eprintln!(
+        "idle registered prelude and physical stop: {:?}, retained_rows=0",
+        began.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn registered_idle_prelude_expired_at_entry_allocates_no_fence_and_skips_cleanup() {
+    use crate::mdk_adapter::healthy_stop::RegisteredStop;
+    let fixture = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let admission = Admission::new(&trip, || true);
+    let mut owner = open_healthy(&fixture, &trip, &admission);
+    let client = Keys::generate().public_key().to_bytes();
+    fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
+    wait_for_idle_engine(&mut owner).await;
+    let before = database_bytes(fixture.lease.journal_database());
+    let mut stop = RegisteredStop::begin(
+        owner,
+        &fixture.lease,
+        &admission,
+        Instant::now() - Duration::from_secs(7),
+        true,
+    )
+    .ok()
+    .expect("registered owner");
+    let report = stop.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(!report.graceful_complete && !report.fatal);
+    assert!(
+        stop.complete(|| panic!("expired prelude cannot clean runtime"))
+            .is_err()
+    );
+    assert_eq!(before, database_bytes(fixture.lease.journal_database()));
+    assert_held(fixture.directory.path());
+}
+
+#[tokio::test]
+async fn registered_idle_prelude_cancelled_observer_retains_owner_during_actual_cut() {
+    use crate::mdk_adapter::healthy_stop::RegisteredStop;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    };
+    let fixture = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let armed = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(AtomicBool::new(false));
+    let (release, wait) = mpsc::channel();
+    let wait = Mutex::new(wait);
+    let owner_thread = std::thread::current().id();
+    let admission = Admission::new(&trip, {
+        let armed = armed.clone();
+        let entered = entered.clone();
+        move || {
+            if std::thread::current().id() != owner_thread && armed.swap(false, Ordering::AcqRel) {
+                entered.store(true, Ordering::Release);
+                wait.lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap();
+            }
+            true
+        }
+    });
+    let mut owner = open_healthy(&fixture, &trip, &admission);
+    let client = Keys::generate().public_key().to_bytes();
+    fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
+    wait_for_idle_engine(&mut owner).await;
+    armed.store(true, Ordering::Release);
+    let before = database_bytes(fixture.lease.journal_database());
+    let mut stop = RegisteredStop::begin(owner, &fixture.lease, &admission, Instant::now(), true)
+        .ok()
+        .expect("registered owner");
+    tokio::select! {
+        _ = until(|| entered.load(Ordering::Acquire)) => {}
+        _ = stop.observe(deadline()) => panic!("owned turn returned before release"),
+    }
+    trip.notify();
+    let interrupted = stop
+        .observe(Instant::now() + Duration::from_millis(15))
+        .await;
+    assert_eq!(interrupted.physical.engine, Barrier::PossiblyLive);
+    assert_eq!(interrupted.physical.sdk, Barrier::Pending);
+    assert!(interrupted.physical.requires_process_hold());
+    assert!(interrupted.fatal && !interrupted.graceful_complete);
+    assert_held(fixture.directory.path());
+    release.send(()).unwrap();
+    let report = stop.observe(deadline()).await;
+    assert!(report.physical.all_complete());
+    assert!(report.fatal && !report.graceful_complete);
+    assert!(
+        stop.complete(|| panic!("fatal prelude cannot clean runtime"))
+            .is_err()
+    );
+    assert_eq!(before, database_bytes(fixture.lease.journal_database()));
+}
+
+#[tokio::test]
+async fn registered_stop_without_engine_bypasses_prelude_budget() {
+    use crate::mdk_adapter::healthy_stop::RegisteredStop;
+    let fixture = Fixture::new();
+    let trip = Arc::new(Trip::new().0);
+    let admission = Admission::new(&trip, || true);
+    let owner = open_healthy(&fixture, &trip, &admission);
+    let mut stop = RegisteredStop::begin(
+        owner,
+        &fixture.lease,
+        &admission,
+        Instant::now() - Duration::from_secs(7),
+        true,
+    )
+    .ok()
+    .expect("registered owner");
+    assert!(stop.observe(deadline()).await.graceful_complete);
+    assert!(stop.complete(|| fixture.lease.cleanup_runtime()).is_ok());
+}

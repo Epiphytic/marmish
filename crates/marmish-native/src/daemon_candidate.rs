@@ -606,8 +606,9 @@ async fn finish(
     mut listener: Listener,
     result: Result<()>,
 ) -> Result<()> {
-    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    use crate::mdk_adapter::healthy_stop::RegisteredStop;
 
+    let began = Instant::now();
     listener.start_drain();
     let Some(owner) = custody.owner.take() else {
         // A canceled or failed guarded open owns its partial resources. Its
@@ -619,12 +620,12 @@ async fn finish(
     let Some(admission) = custody.admission.as_ref() else {
         retain_unproved((custody, listener, owner)).await;
     };
-    let mut stop = match HealthyStop::begin(owner, &custody.lease, admission) {
-        Ok(stop) => stop,
-        Err(owner) => retain_unproved((custody, listener, owner)).await,
-    };
+    let mut stop =
+        match RegisteredStop::begin(owner, &custody.lease, admission, began, result.is_ok()) {
+            Ok(stop) => stop,
+            Err(owner) => retain_unproved((custody, listener, owner)).await,
+        };
 
-    let began = Instant::now();
     let mut last_notice = None;
     loop {
         let deadline = Instant::now() + Duration::from_secs(1);

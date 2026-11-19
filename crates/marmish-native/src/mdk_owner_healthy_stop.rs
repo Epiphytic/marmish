@@ -22,6 +22,10 @@ use tokio::{
 const ENGINE_TURN: Duration = Duration::from_millis(100);
 const STREAM_GRACE: Duration = Duration::from_millis(100);
 
+#[path = "mdk_owner_idle_prelude.rs"]
+mod idle_prelude;
+pub(crate) use idle_prelude::{IdleFence, RegisteredStop};
+
 pub(crate) struct OwnerReport {
     pub(crate) physical: Report,
     pub(crate) graceful_complete: bool,
@@ -49,12 +53,22 @@ struct TransportStop {
     raw: Barrier,
 }
 
-impl HealthyStop {
-    pub(crate) fn begin(
+type OwnerCustody = ManuallyDrop<Box<MdkOwner>>;
+
+struct StopIntake {
+    lease: ManuallyDrop<Arc<ProfileLease>>,
+    admission: Admission,
+    fatal: Fatal,
+    runtime: Handle,
+    runners: Vec<RunnerHandle>,
+}
+
+impl StopIntake {
+    fn prepare(
         mut owner: Box<MdkOwner>,
         lease: &Arc<ProfileLease>,
         admission: &Admission,
-    ) -> std::result::Result<Self, Box<MdkOwner>> {
+    ) -> std::result::Result<(Self, OwnerCustody), Box<MdkOwner>> {
         let Ok(runtime) = Handle::try_current() else {
             return Err(owner);
         };
@@ -79,7 +93,6 @@ impl HealthyStop {
         let fatal = fatal.clone();
         // Failed or indeterminate stops retain the actual owner and flock.
         let mut owner = ManuallyDrop::new(owner);
-        let lease = ManuallyDrop::new(lease.clone());
         if let Some(commands) = &mut owner.commands {
             commands.close_admission();
         }
@@ -88,26 +101,49 @@ impl HealthyStop {
         for runner in &runners {
             runner.suspend_input();
         }
-        // This candidate is Command-only. Stop the worker concurrently while
-        // draining any pre-existing stream state, with no completion egress.
+        Ok((
+            Self {
+                lease: ManuallyDrop::new(lease.clone()),
+                admission: admission.clone(),
+                fatal,
+                runtime,
+                runners,
+            },
+            owner,
+        ))
+    }
+}
+
+impl HealthyStop {
+    #[cfg(test)]
+    pub(crate) fn begin(
+        owner: Box<MdkOwner>,
+        lease: &Arc<ProfileLease>,
+        admission: &Admission,
+    ) -> std::result::Result<Self, Box<MdkOwner>> {
+        let (intake, owner) = StopIntake::prepare(owner, lease, admission)?;
+        Ok(Self::from_prepared(intake, owner, true))
+    }
+
+    fn from_prepared(intake: StopIntake, mut owner: OwnerCustody, allow_grace: bool) -> Self {
         let engine = owner
             .take_engine_for_stop()
             .map_or(Engine::NeverStarted, |engine| {
                 Engine::InOwner(ManuallyDrop::new(Box::new(engine)))
             });
-        Ok(Self {
+        Self {
             owner,
-            lease,
-            admission: admission.clone(),
-            fatal,
-            runtime,
+            lease: intake.lease,
+            admission: intake.admission,
+            fatal: intake.fatal,
+            runtime: intake.runtime,
             engine,
-            runners,
+            runners: intake.runners,
             runners_status: Barrier::Pending,
             transport: None,
-            grace_attempted: false,
+            grace_attempted: !allow_grace,
             graceful: false,
-        })
+        }
     }
 
     /// The first deadline bounds the one graceful attempt. Later observations

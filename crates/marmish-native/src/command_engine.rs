@@ -379,6 +379,15 @@ impl CommandEngine {
     pub fn open_observer_expired(&self) -> bool {
         self.readiness == Readiness::Opening && self.opened.elapsed() >= OPEN_OBSERVER
     }
+    pub(super) fn idle_stop_ready(&mut self) -> bool {
+        !self.copy_gc_pending
+            && self.readiness() == Readiness::Ready
+            && self
+                .thread
+                .as_ref()
+                .is_some_and(|thread| !thread.is_finished())
+    }
+
     pub fn observation_pending(&self) -> bool {
         !self.registered.is_empty() || !self.live_pending.is_empty()
     }

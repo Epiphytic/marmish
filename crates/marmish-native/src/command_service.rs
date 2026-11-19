@@ -28,6 +28,25 @@ struct CleanupPreparation {
     consuming: bool,
 }
 
+// A bounded candidate idle turn uses these same stock steps with an exact
+// admission check at each effect. Stock turns have no additional gate.
+#[derive(Default)]
+struct CleanupTurn<'a> {
+    gate: Option<&'a dyn Fn() -> Result<()>>,
+    progressed: bool,
+}
+
+impl CleanupTurn<'_> {
+    fn check(&self) -> Result<()> {
+        self.gate.map_or(Ok(()), |check| check())
+    }
+
+    fn record_progress(&mut self) -> Result<()> {
+        self.progressed = true;
+        self.check()
+    }
+}
+
 pub(crate) struct CommandService {
     config: CommandConfig,
     inventory_policy: Option<marmish_engine::CommandPolicy>,
@@ -369,18 +388,32 @@ impl CommandService {
         )
     }
     /// One bounded actor turn; engine calls only touch nonblocking channels.
-    pub(crate) fn poll_completions(&mut self, journal: &mut Journal, now: u64) -> Result<()> {
-        let result = self.process_completions(journal, now);
+    pub(crate) fn poll_completions(&mut self, journal: &mut Journal, _now: u64) -> Result<()> {
+        let result = self.process_completions(journal, &mut CleanupTurn::default());
         if result.is_err() && self.cleanup.is_some() {
             self.fail_cleanup();
         }
         result
     }
-    fn process_completions(&mut self, journal: &mut Journal, _now: u64) -> Result<()> {
-        if self.engine.is_none() {
+    fn process_completions(
+        &mut self,
+        journal: &mut Journal,
+        turn: &mut CleanupTurn<'_>,
+    ) -> Result<()> {
+        let idle = turn.gate.is_some();
+        if idle {
+            if self.cleanup.is_none()
+                || !self
+                    .engine
+                    .as_mut()
+                    .is_some_and(CommandEngine::idle_stop_ready)
+            {
+                return Err(Error::Invalid("command_cleanup_state"));
+            }
+        } else if self.engine.is_none() {
             return Ok(());
         }
-        if self.recovery.is_none() {
+        if !idle && self.recovery.is_none() {
             self.recovery = Some(
                 journal
                     .command_recovery()?
@@ -390,7 +423,7 @@ impl CommandService {
             );
         }
         for _ in 0..TURN {
-            if !self.deliver_ack()? {
+            if !self.deliver_ack(turn)? {
                 return Ok(());
             }
             if self.completion.is_none() {
@@ -399,15 +432,30 @@ impl CommandService {
             let Some(completion) = self.completion.as_ref() else {
                 break;
             };
-            let publications = completion_publications(journal, completion)?;
+            let publications = if idle {
+                check_idle_completion(journal, &self.enqueued, completion)?;
+                Vec::new()
+            } else {
+                completion_publications(journal, completion)?
+            };
+            turn.check()?;
             let ack = journal.command_commit_completion(completion, &publications)?;
             self.ack = Some(ack);
             self.completion = None;
+            turn.record_progress()?;
         }
-        if !self.deliver_ack()? {
+        if !self.deliver_ack(turn)? {
             return Ok(());
         }
-        if self
+        if idle {
+            if !self
+                .engine
+                .as_mut()
+                .is_some_and(CommandEngine::idle_stop_ready)
+            {
+                return Err(Error::Invalid("command_cleanup_state"));
+            }
+        } else if self
             .engine
             .as_mut()
             .is_none_or(|engine| engine.readiness() != Readiness::Ready)
@@ -415,8 +463,12 @@ impl CommandService {
             return Ok(());
         }
         if self.cleanup.is_some() {
-            self.advance_cleanup(journal)?;
-            self.cleanup_snapshot();
+            if idle {
+                self.refresh_cleanup(journal, turn)?;
+            } else {
+                self.advance_cleanup(journal)?;
+                self.cleanup_snapshot();
+            }
             Ok(())
         } else {
             self.schedule(journal)
@@ -504,6 +556,10 @@ impl CommandService {
         Ok(true)
     }
     pub(crate) fn begin_cleanup(&mut self, journal: &mut Journal) -> Result<u64> {
+        self.begin_cleanup_turn(journal, &CleanupTurn::default())
+    }
+
+    fn begin_cleanup_turn(&mut self, journal: &mut Journal, turn: &CleanupTurn<'_>) -> Result<u64> {
         if self.cleanup.is_some() {
             return Err(Error::Invalid("server_draining"));
         }
@@ -517,7 +573,11 @@ impl CommandService {
             || counts.worker_running != 0
             || counts.worker_unknown != 0
             || counts.observation_pending
-            || engine.readiness() != Readiness::Ready
+            || if turn.gate.is_some() {
+                !engine.idle_stop_ready()
+            } else {
+                engine.readiness() != Readiness::Ready
+            }
             || engine.observation_pending()
             || self.completion.is_some()
             || self.ack.is_some()
@@ -526,6 +586,7 @@ impl CommandService {
         {
             return Err(Error::Storage("command_cleanup_busy"));
         }
+        turn.check()?;
         let fence = journal.command_allocate_fence()?;
         self.cleanup = Some(CleanupPreparation {
             fence,
@@ -567,8 +628,53 @@ impl CommandService {
         self.poll_completions(journal, 0)?;
         Ok(self.cleanup_snapshot().0)
     }
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn begin_idle_cleanup(
+        &mut self,
+        journal: &mut Journal,
+        fence: &crate::mdk_adapter::healthy_stop::IdleFence,
+    ) -> Result<u64> {
+        let check = || fence.check();
+        self.begin_cleanup_turn(
+            journal,
+            &CleanupTurn {
+                gate: Some(&check),
+                progressed: false,
+            },
+        )
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn poll_idle_cleanup(
+        &mut self,
+        journal: &mut Journal,
+        expected: u64,
+        fence: &crate::mdk_adapter::healthy_stop::IdleFence,
+    ) -> Result<((CleanupState, Option<u64>), bool)> {
+        if self.cleanup_snapshot_readonly() != (CleanupState::Draining, Some(expected)) {
+            return Err(Error::Invalid("command_cleanup_fence"));
+        }
+        let check = || fence.check();
+        let mut turn = CleanupTurn {
+            gate: Some(&check),
+            progressed: false,
+        };
+        // Do not schedule normal work or emit a new FailCleanup control if
+        // this restricted turn refuses or its admission expires.
+        self.process_completions(journal, &mut turn)?;
+        Ok((self.cleanup_snapshot(), turn.progressed))
+    }
+
     fn advance_cleanup(&mut self, journal: &mut Journal) -> Result<()> {
-        let result = self.refresh_cleanup(journal);
+        let result = self.refresh_cleanup(journal, &mut CleanupTurn::default());
         match result {
             Ok(()) => Ok(()),
             Err(Error::Invalid(
@@ -596,7 +702,7 @@ impl CommandService {
             let _ = engine.fail_cleanup();
         }
     }
-    fn refresh_cleanup(&mut self, journal: &mut Journal) -> Result<()> {
+    fn refresh_cleanup(&mut self, journal: &mut Journal, turn: &mut CleanupTurn<'_>) -> Result<()> {
         let preparation = self
             .cleanup
             .as_ref()
@@ -620,6 +726,7 @@ impl CommandService {
                 return Err(Error::Invalid("command_cleanup_authority"));
             }
             if row.observed_seq < fence {
+                turn.check()?;
                 let operation = register(
                     journal,
                     &row.key,
@@ -628,11 +735,13 @@ impl CommandService {
                     EngineOperation::FinalObserve,
                 )?
                 .ok_or(Error::Storage("command_cleanup_busy"))?;
+                turn.record_progress()?;
                 self.enqueue(operation);
-                return Ok(());
+                return turn.record_progress();
             }
             validate_cleanup_row(&row, fence)?;
             self.cleanup.as_mut().expect("cleanup").cursor = Some(row.cursor);
+            turn.record_progress()?;
         }
         // A full page needs another bounded scan; an empty next page completes.
         if journal
@@ -651,6 +760,7 @@ impl CommandService {
             {
                 return Err(Error::Invalid("command_cleanup_observation"));
             }
+            turn.check()?;
             self.engine
                 .as_mut()
                 .ok_or(Error::Invalid("command_engine_missing"))?
@@ -658,13 +768,21 @@ impl CommandService {
             let preparation = self.cleanup.as_mut().expect("cleanup");
             preparation.consuming = true;
             preparation.cursor = None;
+            turn.record_progress()?;
         }
         Ok(())
     }
-    fn deliver_ack(&mut self) -> Result<bool> {
+    fn deliver_ack(&mut self, turn: &mut CleanupTurn<'_>) -> Result<bool> {
         let Some(ack) = &self.ack else {
             return Ok(true);
         };
+        if turn.gate.is_some()
+            && (!self.enqueued.contains(&ack.operation.0)
+                || !ack.answered.is_empty()
+                || !ack.suppressed.is_empty())
+        {
+            return Err(Error::Invalid("command_cleanup_completion"));
+        }
         let copy = CommitAck {
             operation: ack.operation,
             key: ack.key.clone(),
@@ -673,6 +791,7 @@ impl CommandService {
             answered: ack.answered.clone(),
             suppressed: ack.suppressed.clone(),
         };
+        turn.check()?;
         match self
             .engine
             .as_mut()
@@ -687,6 +806,7 @@ impl CommandService {
                 {
                     recovery.remove(&ack.key);
                 }
+                turn.record_progress()?;
                 Ok(true)
             }
             Err(Error::Storage("engine_ack_pending")) => Ok(false),
@@ -889,6 +1009,26 @@ fn response_publication(
         owner.binding().server,
     )
 }
+fn check_idle_completion(
+    journal: &Journal,
+    enqueued: &BTreeSet<[u8; 16]>,
+    completion: &EngineCompletion,
+) -> Result<()> {
+    let operation = journal
+        .command_operation(completion.operation)?
+        .ok_or(Error::Invalid("command_cleanup_completion"))?;
+    if !enqueued.contains(&completion.operation.0)
+        || operation.key != completion.key
+        || operation.revision != completion.revision
+        || operation.request_id.is_some()
+        || !matches!(operation.operation, EngineOperation::FinalObserve)
+        || journal.command_operation_request(operation.id)?.is_some()
+    {
+        return Err(Error::Invalid("command_cleanup_completion"));
+    }
+    Ok(())
+}
+
 fn completion_publications(
     journal: &Journal,
     completion: &EngineCompletion,
