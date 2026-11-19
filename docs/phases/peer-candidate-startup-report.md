@@ -15,19 +15,26 @@ and relay selection. Inspect Ready and effective relay policy read-only
 after config and before identity prepare in the private path. The exclusion
 probe creates no connector and mutates no profile. Effective Tor,
 Initializing, and other reviewed exclusions stop candidate preparation at
-this point. The stock continuation receives the same lease and lifetime
-origin and runs identity prepare, connector construction, elapsed-lifetime
-check and native preflight in their existing order. An eligible private path
-uses the same identity prepare and actual connector construction, then
-confirms effective policy before registration. Prove the lease interval,
+this point. For an early exclusion the stock continuation receives the
+same lease and lifetime origin and runs identity prepare, connector
+construction, elapsed-lifetime check and native preflight in their
+existing order. An eligible private path uses the same identity prepare
+and actual connector construction, then confirms effective policy before
+registration. If the two effective policies differ, skip registration
+and pass the prepared identity and connector to the stock continuation
+immediately before the elapsed-lifetime check and native preflight.
+Prove the lease interval,
 Arc::try_unwrap behavior, uptime origin and relay-binding, identity and
 preflight error precedence.
 
 Only confirmed registration enters registered ownership. A proved Untouched
 result drops temporary witnesses and unwraps the same lease for the stock
-continuation, reusing the prepared identity and connector. Registration
-LocalUnavailable means conflict, calls no competing witness and reports
-the fixed diagnostic. Indeterminate retains the original lease and
+continuation. Reuse the prepared identity and connector and do not repeat
+their construction. Apply the same stock precedence and origin evidence
+to this later fallback. Registration
+LocalUnavailable means conflict, calls no competing witness, reports
+the fixed diagnostic and releases its own lease and temporary witnesses.
+Indeterminate retains the original lease and
 witnesses through process exit. Neither failure enters a stock continuation.
 
 Create registered custody as soon as registration succeeds. The exact
@@ -68,14 +75,23 @@ request receive, owner tick, room turn or Terminal step. Keep listener
 Status in starting until C commits. In the foreground set active after
 the equivalent commit checks.
 
-For both R and C, check the exact admission immediately before attempting
-the write, and fence each resumed write poll with the existing raw socket
-fence. Give the entire child R, A, C exchange one ACK_TIMEOUT (5 seconds).
+R and C are each a single byte. In the registered reporter's write future
+check exact Admission on every poll before calling AsyncWrite::poll_write
+on a borrowed dispatcher_fatal::FencedStream around the Tokio UnixStream.
+FencedStream supplies sticky Fatal and wake on pending I/O, as used in
+ipc::ListenerFence::write. A resumed write retries after WouldBlock and
+performs the same independent admission. Give the entire child R, A, C
+exchange one ACK_TIMEOUT (5 seconds).
 The private parent bounds the exchange by STARTUP_TIMEOUT (240 seconds)
 and its A write by the remaining budget capped at ACK_TIMEOUT. Its test
 budget must leave more than a child's budget after observing R except in
 an explicitly forced timeout test. Race the exchange in priority order
-Fatal, shutdown, lifetime expiry, listener exit, exchange. Keep the
+Fatal, shutdown, lifetime expiry, listener exit, exchange timeout,
+exchange I/O. The timeout revokes the channel and enters owned stop with
+no later C poll. Shutdown observes Ctrl-C, SIGTERM and the harness stop.
+SIGHUP and SIGQUIT retain the OS disposition. EOF is the parent-visible
+precommit outcome for those signals. Enable listener-exit tracking in
+the candidate path. Keep the
 shutdown, expiry and listener observations in owned state and independently
 recheck them alongside exact Admission after A and before the C write.
 Observe a ready listener join once and keep its outcome. Any ready stop
@@ -138,3 +154,7 @@ success from delayed bytes.
   Exercise SIGTERM, lifetime expiry and listener exit during A. Force
   parent timeout with C already buffered and prove the still-owned
   private child is cleaned up under the harness.
+- Check the public marker rejection and stock symbol absence. Prove the
+  LocalUnavailable path releases only its own lease and the indeterminate
+  path retains the original lease. Confirm stock error precedence and
+  max-uptime origin for both early and late fallback.
