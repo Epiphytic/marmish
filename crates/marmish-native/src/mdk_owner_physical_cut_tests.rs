@@ -16,7 +16,7 @@ use crate::{
 };
 use marmish_stream::{codec::Codec, wire::Binding};
 use nostr::key::Keys;
-use std::{fs, path::Path};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 use tokio::sync::oneshot;
 
 const PROFILE: &str = "ordinary";
@@ -29,7 +29,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .permissions(fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
         let mut lease = ProfileLease::acquire(directory.path(), PROFILE).unwrap();
         let material = lease
             .prepare(
@@ -76,6 +79,7 @@ impl Fixture {
         let config = CommandConfig::from_bytes(
             &serde_json::to_vec(&serde_json::json!({
                 "version":1, "role":"server", "relays":[relay_url], "tor":"off",
+                "cwd":"/", "limits":{}, "aliases":{},
                 "execution_clients":[hex::encode(execution_client)],
             }))
             .unwrap(),
@@ -89,13 +93,19 @@ impl Fixture {
             self.material.sqlcipher_root(),
         )
         .unwrap();
-        let policy = config
-            .engine_policy(
-                self.lease.root().join("commands"),
-                std::env::current_exe().unwrap(),
-                account,
-                &[],
+        owner
+            .journal
+            .command_bind_engine(
+                crate::command_identity::DERIVATION_VERSION,
+                &identity.root_id,
+                &identity.key_id,
             )
+            .unwrap();
+        let worker = self.lease.root().join("test-worker");
+        fs::copy(std::env::current_exe().unwrap(), &worker).unwrap();
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o700)).unwrap();
+        let policy = config
+            .engine_policy(self.lease.root().join("commands"), worker, account, &[])
             .unwrap()
             .unwrap();
         let engine = CommandEngine::start_candidate(
@@ -369,6 +379,7 @@ async fn private_wss() {
         .unwrap();
     let mut owner = fixture.open(connector);
     let local = fixture.material.public_key();
+    relay.ordinary(local);
     let peer = Keys::generate().public_key().to_bytes();
     fixture.install_engine(&mut owner, &trip, relay.url.as_str(), peer);
     until(|| {
