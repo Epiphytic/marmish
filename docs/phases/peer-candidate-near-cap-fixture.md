@@ -83,9 +83,12 @@ Keep a 32 MiB budget for the DELETE journal, allowing the room needed to
 securely zero pages during DROP as well as page records and journal headers.
 With cache spill off and no other writers, a transaction journals each
 preexisting page at most once and only the bounded main database can be
-journaled. A pre-growth commit SQLITE_FULL rolls back the first transaction
-and the offline test verifies the original closed digest. A failure after
-allocation commit, including any hot journal, invalidates the fixture.
+journaled. A SQLITE_FULL rollback can re-encrypt restored pages, changing
+ciphertext without changing the SQL state. The offline test exercises the
+low-cap refusal on a separate disposable copy, verifies retained pager
+extent, schema and integrity there, and verifies the untouched original's
+closed digest. Any growth error invalidates its destination, including an
+ambiguous commit or a hot journal.
 
 Before returning, require scratch table absence, equal permanent schema and
 header versions, equal page size, retained page count after DROP, and an
@@ -111,8 +114,8 @@ as `Identified` with charge under 128 MiB. The installed cursor offline read
 must show no changed digest or identity. Run fast negatives for wrong key,
 wrong inode, a sidecar and substituted file (symlink, extra hard link, wrong
 mode), existing grown image, an exact 16 MiB image, wrong/missing custody
-selection or absent Prepared state, a too-low max page count with digest
-rollback, and a bound receiver VFS. Assert no unrequested write and fixed
+selection or absent Prepared state, a too-low max page count on an isolated
+copy with logical rollback, and a bound receiver VFS. Assert no unrequested write and fixed
 failure category. A corruption control on a disposable copy can demonstrate
 the cipher HMAC check sees stored page corruption if needed.
 
