@@ -27,3 +27,9 @@ pre-spawn cut demonstrates no launcher entry. The stock layout case tests
 the shared lazy resolution path. The test's five-second synchronization
 bounds give explicit failures if the worker or frontend misses its barrier.
 See [validation](../validation/peer-candidate-command-startup.md).
+
+Claude Code Auto session `7e3ab257-dffd-443d-abb0-b08b35680856` approved
+the exact composition `b1e1906` and reran the immutable candidate tests.
+The changed source and its dependency entry points remained byte-identical
+after the merge with the recipient actor. The review did not recompile the
+composed tree. The registered daemon still does not invoke this adapter.
