@@ -111,9 +111,10 @@ checked connection using a private isolated fixture. The
 [managed Delivery proof](validation/peer-candidate-managed-delivery.md)
 uses that port to move Deferred to Held after the ACK, with the original
 package digest checked against the same measured quota. It refuses a
-proof issued for a different turn. Before this path can serve the daemon,
-expired retained Deliveries need bounded retirement so they cannot
-block later eligible work. The
+proof issued for a different turn. [Bounded retirement](validation/peer-candidate-expired-delivery.md)
+removes the exact expired retry and advances both wall floors in one
+transaction. The package charge remains held. The retirement path still
+needs a daemon scheduler. The
 [storage and listener composition](validation/peer-candidate-owner-leaves-composition.md)
 qualifies the managed queued-package reader, borrowed Pending over private
 WSS, account custody across dispatcher cuts, and the same-user read

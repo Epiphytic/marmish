@@ -26,3 +26,13 @@ FlightVerified row. Local ancestry refusal testing uses missing and corrupt
 stage cases, and SQLite busy is tested through the outcome mapping. A future
 actor must treat Stop as a sweep barrier and cool transient results through
 its bounded retry policy.
+
+## Integrated source
+
+Claude Code Auto sessions `ef6cecc6-800c-41ff-bab5-f2dcd0919c31` and
+`02a1f983-83b7-4f8d-8cba-a8628b0c40a3` inspected the composition. The runtime reviewer approved
+the exact `a48aeb30` source and independently passed the retirement classifier,
+the exact single-slot Pending check, and 15 cursor regressions with one opt-in
+benchmark skipped. The reviewer confirmed that the daemon has no retirement
+caller and requested final attribution of the integrated binary and tests,
+which the validation report now records.

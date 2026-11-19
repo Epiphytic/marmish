@@ -47,6 +47,20 @@ The leaf is available to future candidate composition. No daemon actor,
 stock route, wire or installer behavior changes in this phase. This fixture
 qualifies localhost Linux AMD64 only.
 
+## Integrated qualification
+
+Source `a48aeb30eab417d505b6e58e49f816bb00c6c473` combines this leaf with the
+private Manual listener and upstream MDK lock. The immutable libtest embeds
+that source ID and hashes to
+`a2b4e36d09ded88c179098a6e74f0d8f3f0d93ea5e0720328ead35ad7da845ce`.
+
+The two retirement subprocesses passed in 43.82 s. The seven existing private
+managed Consent cases passed in 119.92 s. The Manual read-half test passed in
+3.99 s, the 25 read-path tests passed, and the cursor check passed 15 tests in
+8.32 s with one opt-in benchmark skipped. An expected HMAC error in each
+corruption fixture verified refusal. Strict all-target native Clippy passed
+for stock in 33.84 s and for the candidate in 31.07 s.
+
 ## Reproduce
 
 ```sh
