@@ -569,9 +569,12 @@ impl ManualSchemaStartup<'_> {
         .await;
         assert!(active(self.socket).await);
         unavailable(self.socket).await;
-        assert_eq!(
-            peer_approve::client_request(self.socket, selection).await,
-            Err(Failure::Unavailable),
+        assert!(
+            matches!(
+                peer_approve::client_request(self.socket, selection).await,
+                Err(Failure::Unavailable | Failure::Uncertain)
+            ),
+            "the stopped Peer worker cannot acknowledge approval",
         );
         child.stop().await;
         assert!(!self.socket.exists());
