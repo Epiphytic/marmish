@@ -22,6 +22,47 @@ impl ConsentTurn<'_, '_> {
 }
 
 impl<'lease> RecoveredOwner<'lease> {
+    pub(in crate::peer_invitation) fn due_managed_consent(
+        &mut self,
+        scope: &crate::peer_relay_trust::NativeRouteWindow<'_>,
+        selector: Selector,
+    ) -> Result<Option<ManagedQueued>> {
+        let wall = scope.wall().as_secs();
+        Ok(self
+            .checkpoint
+            .read_managed_queued(
+                &self.source,
+                scope.account(),
+                scope.origin(),
+                selector,
+                wall,
+            )?
+            .filter(|queued| queued.is_due(wall)))
+    }
+
+    pub(in crate::peer_invitation) fn wake_managed_delivery(
+        &mut self,
+        settled: SettledConsent,
+        ack: CheckedAck<'_>,
+        window: &NativeWindow,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<usize> {
+        window.check()?;
+        let (account, origin, wall) = ack.observation();
+        let woken = self.checkpoint.wake_installed_delivery_fenced(
+            &self.source,
+            settled,
+            account,
+            origin,
+            wall,
+            || {
+                before_commit().map_err(|_| CheckpointError::Expired)?;
+                commit_fence(window)
+            },
+        )?;
+        Ok(woken)
+    }
+
     pub(in crate::peer_invitation) fn queue_managed_consent(
         &mut self,
         quota: &ReceiverQuota<'_>,

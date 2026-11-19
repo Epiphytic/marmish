@@ -13,12 +13,19 @@ use crate::{
     },
 };
 
+#[path = "peer_managed_consent_port_wss_tests.rs"]
+mod joined_port;
+
 const ACK_CASE: &str = "MARMISH_MANAGED_CONSENT_ACK_CASE";
 
 #[test]
 #[ignore = "opt-in registered SQLCipher and genuine checked private WSS ACK"]
 fn managed_consent_checked_ack_is_exact_and_single_use() {
-    for case in ["settle", "replay", "stale", "guards", "stop"] {
+    run_cases(&["settle", "replay", "stale", "guards", "stop"]);
+}
+
+fn run_cases(cases: &[&str]) {
+    for case in cases {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--ignored",
@@ -152,6 +159,27 @@ async fn managed_consent_ack_child() {
     let queued = owner
         .queue_managed_consent(quota, &reservation, &proof, &window)
         .unwrap();
+    if let Some(case) = case.strip_prefix("port-") {
+        joined_port::run(
+            case,
+            joined_port::Fixture {
+                relay: &relay,
+                port: &mut port,
+                sender: &mut sender,
+                founder: &founder,
+                offer: &offer.flight,
+                quota,
+                readiness: ready.readiness(),
+                stop: stopped,
+                profile: lease.root(),
+            },
+            owner,
+            queued,
+            || RecoveredOwner::open_registered(&lease, &material, quota, &mut route).unwrap(),
+        )
+        .await;
+        return;
+    }
     let turn = owner
         .reserve_managed_consent(quota, queued, &window)
         .unwrap()

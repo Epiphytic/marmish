@@ -239,12 +239,21 @@ impl NativeWindow {
     }
 
     pub(super) fn sample(&self) -> Result<Duration> {
+        self.checked_sample().map(|(wall, _)| wall)
+    }
+
+    pub(in crate::peer_invitation) fn remaining(&self) -> Result<Duration> {
+        let (_, tick) = self.checked_sample()?;
+        self.0.tick_end.checked_sub(tick).ok_or(Error::Clock)
+    }
+
+    fn checked_sample(&self) -> Result<(Duration, Duration)> {
         let mut floor = self.0.floor.lock().map_err(|_| Error::Clock)?;
         let previous = floor.take().ok_or(Error::Clock)?;
         let now = Sample::now()?;
         let wall = self.observe(now, previous)?;
         *floor = Some(now);
-        Ok(wall)
+        Ok((wall, now.tick))
     }
 
     pub(super) fn require_offer_limit(&self, offer_expires: u64) -> Result<()> {

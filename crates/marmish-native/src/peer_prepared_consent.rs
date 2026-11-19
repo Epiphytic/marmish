@@ -272,9 +272,24 @@ impl ManagedQueued {
         &self.target
     }
 
+    pub(crate) fn is_due(&self, wall: u64) -> bool {
+        self.queued.row.ack_at.is_none()
+            && self.queued.row.retry_at.is_none_or(|retry| retry <= wall)
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture_retry_at(&self) -> Option<u64> {
         self.queued.row.retry_at
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_frame(&self) -> ([u8; 32], &[u8]) {
+        (self.queued.row.transcript.carrier, &self.queued.row.frame)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_attempt(&self) -> (u64, Option<u64>) {
+        (self.queued.row.attempt, self.queued.row.ack_at)
     }
 
     pub(crate) fn matches_saved(&self, saved: &Queued) -> bool {

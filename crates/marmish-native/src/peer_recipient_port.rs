@@ -184,6 +184,10 @@ fn operation(attempt: &Attempt) -> Operation {
     target_arch = "x86_64"
 ))]
 impl CheckedAck<'_> {
+    pub(in crate::peer_invitation) fn observation(&self) -> (PublicKey, &str, u64) {
+        (self.account, self.origin, self.wall)
+    }
+
     pub(in crate::peer_invitation) fn exact_attempt(
         &self,
         attempt: &Attempt,
@@ -511,6 +515,14 @@ impl PeerRecipientPort {
 fn sealed_digest(frame: &[u8]) -> [u8; 32] {
     Sha256::digest(frame).into()
 }
+
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_managed_consent_port.rs"]
+pub(in crate::peer_invitation) mod managed_consent;
 
 #[cfg(test)]
 #[path = "peer_authenticated_route_tests.rs"]

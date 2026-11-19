@@ -1,6 +1,5 @@
 //! Requalify one revisioned stored Delivery after its Consent settles.
 
-use super::super::super::publication::installed_settlement::SettledConsent;
 use super::*;
 use crate::peer_invitation::{
     socket::owner::recipient::{CheckedSavedDelivery, SavedPortWitness},
@@ -40,38 +39,6 @@ impl PreparedSaved<'_> {
 }
 
 impl Checkpoint {
-    pub(in crate::peer_invitation) fn wake_installed_delivery(
-        &mut self,
-        source: &Source,
-        settled: SettledConsent,
-        account: PublicKey,
-        origin: &str,
-        wall: u64,
-    ) -> Result<usize> {
-        let (owner, selector, carrier, ack_wall) = settled.consume();
-        self.check_local_owner(&owner)?;
-        self.check_installed_consent_scope(source, account, origin, wall)?;
-        let cx = self.custody_context(source)?;
-        Ok(self
-            .cursor
-            .wake_with_fence(cx.origin, carrier, wall, |tx| {
-                cx.verify(tx, wall)?;
-                let Ancestry::Queued(queued) = cx
-                    .installed_ancestry(tx, selector)
-                    .map_err(schema::cursor_error)?
-                else {
-                    return Err(CursorError::Stale);
-                };
-                if queued.row.transcript.carrier != carrier
-                    || queued.row.ack_at != Some(ack_wall)
-                    || ack_wall > wall
-                {
-                    return Err(CursorError::Stale);
-                }
-                rows::advance_wall(tx, wall)
-            })?)
-    }
-
     pub(in crate::peer_invitation) fn due_installed_delivery(
         &mut self,
         source: &Source,

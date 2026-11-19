@@ -365,6 +365,17 @@ impl CursorStore {
         wall: u64,
         fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
     ) -> Result<usize> {
+        self.wake_with_commit_fence(origin, prerequisite, wall, fence, || Ok(()))
+    }
+
+    pub(crate) fn wake_with_commit_fence(
+        &mut self,
+        origin: Origin,
+        prerequisite: [u8; 32],
+        wall: u64,
+        fence: impl FnOnce(&Transaction<'_>) -> Result<()>,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<usize> {
         let tx = self.with_wall(origin, wall)?;
         fence(&tx)?;
         let updated = tx.execute(
@@ -377,6 +388,7 @@ impl CursorStore {
                 next_revision(&tx, origin)?
             ],
         )?;
+        before_commit()?;
         tx.commit()?;
         Ok(updated)
     }

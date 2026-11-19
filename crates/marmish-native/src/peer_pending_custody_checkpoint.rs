@@ -77,6 +77,15 @@ native_offer_ingress_fixture!();
 #[path = "peer_installed_offer_ingress.rs"]
 pub(in crate::peer_invitation) mod offer_ingress;
 
+#[cfg(all(
+    not(test),
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_installed_delivery_wake.rs"]
+mod delivery_wake;
+
 #[path = "peer_pending_custody_schema.rs"]
 mod custody_schema;
 pub(crate) use custody_schema::Epoch;

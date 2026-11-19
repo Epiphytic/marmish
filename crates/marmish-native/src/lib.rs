@@ -141,6 +141,8 @@ macro_rules! native_offer_ingress_fixture {
     () => {
         #[path = "peer_installed_delivery_ingress.rs"]
         pub(in crate::peer_invitation) mod delivery_ingress;
+        #[path = "peer_installed_delivery_wake.rs"]
+        mod delivery_wake;
         #[path = "peer_installed_offer_ingress.rs"]
         pub(in crate::peer_invitation) mod offer_ingress;
     };

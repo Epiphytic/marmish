@@ -398,6 +398,32 @@ impl<'lease> RecoveredOwner<'lease> {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn fixture_attest_delivery(
+        &mut self,
+        quota: &ReceiverQuota<'_>,
+        queued: &ManagedQueued,
+        window: &NativeWindow,
+        (stage, observed): ((Binding, FileWitness), u64),
+    ) -> Result<super::super::prepared_consent::NativeAttestation> {
+        use super::super::prepared_consent::NativeAttestation;
+        let proof = self.attest_queued_package(quota, queued, window)?;
+        if proof.target.stage() != stage {
+            return Err(Error::Binding);
+        }
+        self.recheck_managed_package(quota, &proof, window)?;
+        let wall = window.sample()?.as_secs();
+        if wall < observed {
+            return Err(Error::Clock);
+        }
+        proof.package.check_lifetime(wall)?;
+        Ok(NativeAttestation::fixture_managed(
+            stage,
+            proof.package.event,
+            proof.digest,
+        ))
+    }
+
     fn read_charged_package(
         &mut self,
         quota: &ReceiverQuota<'_>,

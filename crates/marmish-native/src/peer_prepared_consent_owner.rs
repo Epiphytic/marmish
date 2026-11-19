@@ -360,6 +360,20 @@ pub(crate) struct NativeAttestation {
 }
 
 impl NativeAttestation {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(super) fn fixture_managed(
+        (binding, witness): (Binding, FileWitness),
+        package: NativePackage,
+        image: [u8; 32],
+    ) -> Self {
+        Self {
+            binding,
+            witness,
+            package,
+            image,
+        }
+    }
+
     pub(super) fn require(
         &self,
         stage: (Binding, FileWitness),
