@@ -146,11 +146,7 @@ mod tests {
 
     #[test]
     fn fatal_join_requires_worker_or_successful_previous_join() {
-        assert!(
-            FatalEngineJoin::new(None, WorkerJoin::Joined)
-                .wait()
-                .is_ok()
-        );
+        assert!(FatalEngineJoin::new(None, WorkerJoin::Joined).wait().is_ok());
         for outcome in [WorkerJoin::Pending, WorkerJoin::Panicked] {
             assert!(matches!(
                 FatalEngineJoin::new(None, outcome).wait(),

@@ -607,7 +607,8 @@ fn open_healthy(fixture: &Fixture, trip: &Arc<Trip>, admission: &Admission) -> B
 async fn healthy_owned_stop_binds_exact_admission_and_closes_after_native_drain() {
     use crate::mdk_adapter::healthy_stop::HealthyStop;
     let fixture = Fixture::new();
-    let trip = Trip::new();
+    let (trip, _) = Trip::new();
+    let trip = Arc::new(trip);
     let admission = Admission::new(&trip, || true);
     let owner = open_healthy(&fixture, &trip, &admission);
     let another_admission = Admission::new(&trip, || true);
@@ -655,7 +656,8 @@ async fn healthy_owned_stop_binds_exact_admission_and_closes_after_native_drain(
 async fn healthy_owned_stop_keeps_forwarder_and_refuses_effects_after_cut() {
     use crate::mdk_adapter::healthy_stop::HealthyStop;
     let fixture = Fixture::new();
-    let trip = Trip::new();
+    let (trip, _) = Trip::new();
+    let trip = Arc::new(trip);
     let admission = Admission::new(&trip, || true);
     let mut owner = open_healthy(&fixture, &trip, &admission);
     let (release, hold) = oneshot::channel();
@@ -688,7 +690,8 @@ async fn healthy_owned_stop_keeps_forwarder_and_refuses_effects_after_cut() {
 async fn healthy_owned_stop_reports_cut_during_final_cleanup_and_retains_lease() {
     use crate::mdk_adapter::healthy_stop::HealthyStop;
     let fixture = Fixture::new();
-    let trip = Trip::new();
+    let (trip, _) = Trip::new();
+    let trip = Arc::new(trip);
     let admission = Admission::new(&trip, || true);
     let owner = open_healthy(&fixture, &trip, &admission);
     let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
@@ -706,4 +709,27 @@ async fn healthy_owned_stop_reports_cut_during_final_cleanup_and_retains_lease()
     let report = retained.observe(deadline()).await;
     assert!(report.physical.all_complete());
     assert!(!report.graceful_complete && report.fatal);
+}
+
+#[tokio::test]
+async fn healthy_owned_stop_joins_real_started_command_engine() {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+    let fixture = Fixture::new();
+    let (trip, _) = Trip::new();
+    let trip = Arc::new(trip);
+    let admission = Admission::new(&trip, || true);
+    let mut owner = open_healthy(&fixture, &trip, &admission);
+    let client = Keys::generate().public_key().to_bytes();
+    fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
+    let mut stopping = HealthyStop::begin(owner, &fixture.lease, &admission)
+        .ok()
+        .unwrap();
+    let report = stopping.observe(deadline()).await;
+    assert_eq!(report.physical.engine, Barrier::Complete);
+    assert!(report.graceful_complete);
+    assert!(
+        stopping
+            .complete(|| fixture.lease.cleanup_runtime())
+            .is_ok()
+    );
 }
