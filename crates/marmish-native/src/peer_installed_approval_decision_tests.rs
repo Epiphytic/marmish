@@ -309,16 +309,18 @@ fn approval_read_uses_exact_installed_schema_and_manual_source() {
         (ApprovalV3, ReceivePolicy::Manual, ApprovalFailure::Stale),
     ] {
         let f = Fixture::new();
-        drop(
-            Checkpoint::attach_installed_v2(
-                f.open(),
-                f.client.clone(),
-                UID,
-                URL,
-                Policy::default(),
-            )
-            .unwrap(),
-        );
+        if matches!(kind, V2) {
+            drop(
+                Checkpoint::attach_installed_v2(
+                    f.open(),
+                    f.client.clone(),
+                    UID,
+                    URL,
+                    Policy::default(),
+                )
+                .unwrap(),
+            );
+        }
         let mut cp = Checkpoint::attach_installed_epoch(
             f.open(),
             f.client.clone(),
@@ -360,4 +362,52 @@ fn approval_read_uses_exact_installed_schema_and_manual_source() {
         }
         assert_eq!(f.inventory(), inventory);
     }
+}
+
+#[test]
+fn approval_epoch_requires_fresh_cursor_and_remains_incompatible_with_v2() {
+    use custody_schema::InstalledKind::{ApprovalV3, V2};
+
+    let f = Fixture::new();
+    let attach = |kind| {
+        Checkpoint::attach_installed_epoch(
+            f.open(),
+            f.client.clone(),
+            UID,
+            URL,
+            Policy::default(),
+            ReceivePolicy::Manual,
+            kind,
+        )
+    };
+    drop(
+        Checkpoint::attach_installed_v2(f.open(), f.client.clone(), UID, URL, Policy::default())
+            .unwrap(),
+    );
+    let predecessor = f.inventory();
+    assert!(matches!(attach(ApprovalV3), Err(Error::Layout)));
+    assert_eq!(f.inventory(), predecessor);
+    drop(attach(V2).unwrap());
+    let v2 = f.inventory();
+    assert!(matches!(attach(ApprovalV3), Err(Error::Layout)));
+    assert_eq!(f.inventory(), v2);
+    drop(attach(V2).unwrap());
+
+    let f = Fixture::new();
+    let attach = |kind| {
+        Checkpoint::attach_installed_epoch(
+            f.open(),
+            f.client.clone(),
+            UID,
+            URL,
+            Policy::default(),
+            ReceivePolicy::Manual,
+            kind,
+        )
+    };
+    drop(attach(ApprovalV3).unwrap());
+    let v3 = f.inventory();
+    assert!(matches!(attach(V2), Err(Error::Layout)));
+    assert_eq!(f.inventory(), v3);
+    drop(attach(ApprovalV3).unwrap());
 }

@@ -116,13 +116,17 @@ fn attach(cursor: &mut CursorStore, codec: &Codec, signer: &Keys, route: &Route)
         {
             return Err(CursorError::Binding);
         }
-        rows::attach_rows(&tx, account, provisioning::attach)?;
-        install(&tx)?;
+        install_rows(&tx, account)?;
     }
     verify(&tx, account, origin)?;
     verify_recovered_parents(&tx, codec, signer, route)?;
     tx.commit()?;
     Ok(())
+}
+
+pub(super) fn install_rows(tx: &Transaction<'_>, account: PublicKey) -> DbResult<()> {
+    rows::attach_rows(tx, account, provisioning::attach)?;
+    install(tx)
 }
 
 pub(super) fn verify(conn: &Connection, account: PublicKey, origin: Origin) -> DbResult<()> {

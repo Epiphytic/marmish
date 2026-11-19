@@ -613,18 +613,38 @@ pub(super) fn open_installed(
         return Err(Error::Layout);
     }
     let epoch = Epoch(Kind::Installed(kind));
-    if inventory(&tx).map_err(super::schema::cursor_error)? != expected(epoch.0)? {
-        installed::verify(&tx, account, route.id)?;
-        installed::verify_recovered_parents(&tx, codec, signer, route)?;
-        let used: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM peer_provisioning_slot
-                WHERE generation!=0 OR next_start_at!=0 OR server IS NOT NULL
-                   OR offer_id IS NOT NULL OR revision IS NOT NULL OR origin IS NOT NULL)",
-            [],
-            |row| row.get(0),
-        )?;
-        if used {
-            return Err(CursorError::Binding.into());
+    let entries = inventory(&tx).map_err(super::schema::cursor_error)?;
+    if entries != expected(epoch.0)? {
+        match kind {
+            InstalledKind::V2 => {
+                installed::verify(&tx, account, route.id)?;
+                installed::verify_recovered_parents(&tx, codec, signer, route)?;
+                let used: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM peer_provisioning_slot
+                        WHERE generation!=0 OR next_start_at!=0 OR server IS NOT NULL
+                           OR offer_id IS NOT NULL OR revision IS NOT NULL OR origin IS NOT NULL)",
+                    [],
+                    |row| row.get(0),
+                )?;
+                if used {
+                    return Err(CursorError::Binding.into());
+                }
+            }
+            #[cfg(any(
+                test,
+                all(
+                    marmish_peer_receiver_candidate,
+                    target_os = "linux",
+                    target_arch = "x86_64"
+                )
+            ))]
+            InstalledKind::ApprovalV3 => {
+                if !entries.is_empty() {
+                    return Err(Error::Layout);
+                }
+                CursorStore::attach_rows(&tx, account.to_bytes(), &origins)?;
+                installed::install_rows(&tx, account)?;
+            }
         }
         stage_schema::attach(&tx, true)?;
         super::schema::install(&tx)?;

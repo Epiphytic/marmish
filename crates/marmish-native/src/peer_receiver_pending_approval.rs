@@ -19,10 +19,6 @@ pub(in crate::peer_invitation) struct ApprovalSettlement {
     exchange: Exchange,
 }
 
-#[allow(
-    dead_code,
-    reason = "the candidate approval actor is mounted separately"
-)]
 impl ApprovalSettlement {
     pub(in crate::peer_invitation) fn result(&self) -> PortDecision {
         self.result
@@ -137,10 +133,6 @@ impl Exchange {
     }
 }
 
-#[allow(
-    dead_code,
-    reason = "the candidate approval actor is mounted separately"
-)]
 impl PendingTurn<'_, '_> {
     pub(in crate::peer_invitation) fn approve(
         &mut self,

@@ -191,6 +191,12 @@ impl CursorStore {
         }
         check_hardening(&conn)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::attach_rows(&tx, account, &origins)?;
+        tx.commit()?;
+        Ok(Self { conn, origins })
+    }
+
+    fn attach_rows(tx: &Transaction<'_>, account: [u8; 32], origins: &[Origin]) -> Result<()> {
         tx.execute_batch(SCHEMA)?;
         let current = tx
             .query_row(
@@ -199,20 +205,20 @@ impl CursorStore {
                 |row| Ok((row.get::<_, i64>(0)?, row.get::<_, [u8; 32]>(1)?)),
             )
             .optional()?;
-        let mut stored = stored_origins(&tx)?;
+        let mut stored = stored_origins(tx)?;
         match current {
             None if stored.is_empty() => {
                 tx.execute(
                     "INSERT INTO peer_cursor_version VALUES (1, 1, ?1)",
                     [account],
                 )?;
-                for origin in &origins {
+                for origin in origins {
                     tx.execute(
                         "INSERT INTO peer_cursor_origin (origin) VALUES (?1)",
                         [origin],
                     )?;
                 }
-                stored.clone_from(&origins);
+                stored.extend_from_slice(origins);
             }
             Some((1, expected)) if expected == account => {}
             _ => return Err(Error::Binding),
@@ -220,8 +226,7 @@ impl CursorStore {
         if stored != origins {
             return Err(Error::Binding);
         }
-        tx.commit()?;
-        Ok(Self { conn, origins })
+        Ok(())
     }
 
     fn begin(&mut self, origin: Origin) -> Result<Transaction<'_>> {

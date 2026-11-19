@@ -269,11 +269,35 @@ async fn mounted(case: ManualCase) {
             peer_approve::client_request(&socket, wrong).await,
             Err(Failure::Stale),
         );
+        use nostr::nips::nip19::ToBech32 as _;
+
         let clock = Instant::now();
-        assert_eq!(
-            peer_approve::client_request(&socket, exact.selection).await,
-            Ok(()),
-        );
+        let cli = timeout(
+            STEP,
+            tokio::process::Command::new(daemon.with_file_name("marmish"))
+                .kill_on_drop(true)
+                .arg("--state-dir")
+                .arg(root.path())
+                .arg("--identity")
+                .arg(PROFILE)
+                .arg("--socket")
+                .arg(&socket)
+                .args(["servers", "approve", "--server"])
+                .arg(exact.selection.server.to_bech32().unwrap())
+                .arg("--offer-id")
+                .arg(hex::encode(exact.selection.offer_id))
+                .arg("--revision")
+                .arg(hex::encode(exact.selection.revision))
+                .arg("--generation")
+                .arg(exact.selection.generation.to_string())
+                .output(),
+        )
+        .await
+        .expect("installed approval CLI exits")
+        .expect("installed approval CLI starts");
+        assert!(cli.status.success(), "{:?}", cli.status);
+        assert_eq!(cli.stdout, b"recorded local approval\n");
+        assert!(cli.stderr.is_empty());
         println!(
             "manual_approval_decision_ms {}",
             clock.elapsed().as_millis()
@@ -298,6 +322,8 @@ async fn mounted(case: ManualCase) {
         .await
         .expect("published read view stops showing the approved invitation");
         expect_no_pending(&socket, exact.selection).await;
+        assert_manual_requests(&peer, signer, recipient);
+        assert_eq!(peer.all_publication_attempts(), 3);
     }
 
     let requests_before_loss = peer.recipient_requests(signer);
@@ -395,6 +421,9 @@ async fn mounted(case: ManualCase) {
         .await
         .expect("reopened candidate replies to the original selection");
         assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
+        assert_manual_requests(&peer, signer, reopened_recipient);
+        assert_eq!(peer.qualification_connections(), reopened_recipient + 1);
+        expect_no_pending(&socket, exact.selection).await;
     } else {
         let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
         if measure_near_cap && cold_entry.is_none() {

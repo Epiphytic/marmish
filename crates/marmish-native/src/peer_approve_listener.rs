@@ -26,7 +26,6 @@ pub(super) struct Listener(Arc<Pair>);
 #[derive(Clone)]
 pub(super) struct Intake(Arc<Pair>);
 
-#[allow(dead_code, reason = "the reviewed actor composition mounts the worker")]
 pub(crate) struct Worker(Arc<Pair>);
 
 struct Pair {
@@ -210,7 +209,6 @@ async fn disconnected(reader: &OwnedReadHalf) {
         .await;
 }
 
-#[allow(dead_code, reason = "the reviewed actor composition mounts the worker")]
 impl Worker {
     pub(crate) fn try_claim(&self) -> Option<Claimed> {
         let exchange = {
@@ -261,7 +259,6 @@ pub(crate) struct Claimed {
     reply: oneshot::Sender<Decision>,
 }
 
-#[allow(dead_code, reason = "the reviewed actor composition mounts the worker")]
 impl Claimed {
     pub(crate) fn selection(&self) -> Selection {
         self.exchange.selection
@@ -309,10 +306,6 @@ impl Claimed {
 
 pub(crate) struct Consumed(Claimed);
 
-#[allow(
-    dead_code,
-    reason = "the reviewed actor composition mounts the decision guard"
-)]
 impl Consumed {
     pub(crate) fn selection(&self) -> Selection {
         self.0.selection()

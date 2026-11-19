@@ -199,7 +199,7 @@ impl<'lease> RecoveredOwner<'lease> {
             cursor.unchanged()?;
             Ok::<_, Error>(conn)
         };
-        if fresh {
+        if fresh && matches!(epoch, CursorEpoch::V2) {
             Checkpoint::attach_installed_v2(
                 open()?,
                 (*signer).clone(),
