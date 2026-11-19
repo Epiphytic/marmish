@@ -107,6 +107,13 @@ pub(crate) enum StopOutcome {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkerJoin {
+    Pending,
+    Joined,
+    Panicked,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QueueBusy {
     Full,
     InvocationBusy,
@@ -185,7 +192,7 @@ pub(crate) struct CommandEngine {
     completions: VecDeque<EngineCompletion>,
     registered: BTreeMap<Key, Registration>,
     thread: Option<JoinHandle<()>>,
-    thread_failed: bool,
+    worker_join: WorkerJoin,
     mode: Mode,
     readiness: Readiness,
     cleanup: CleanupState,
@@ -292,7 +299,7 @@ impl CommandEngine {
             completions: VecDeque::new(),
             registered: BTreeMap::new(),
             thread: Some(thread),
-            thread_failed: false,
+            worker_join: WorkerJoin::Pending,
             mode,
             readiness: Readiness::Opening,
             cleanup: CleanupState::Open,
@@ -553,8 +560,12 @@ impl CommandEngine {
         self.collect();
         let complete = self.thread.as_ref().is_none_or(|t| t.is_finished());
         if complete && let Some(t) = self.thread.take() {
-            self.thread_failed = t.join().is_err();
-            if self.thread_failed && !self.mode.tripped() {
+            self.worker_join = if t.join().is_ok() {
+                WorkerJoin::Joined
+            } else {
+                WorkerJoin::Panicked
+            };
+            if self.worker_join == WorkerJoin::Panicked && !self.mode.tripped() {
                 return Err(Error::Storage("engine_thread_failed"));
             }
         }
@@ -565,7 +576,7 @@ impl CommandEngine {
         if self.mode.tripped() {
             return Ok(StopOutcome::Fatal);
         }
-        if self.mode.candidate() && self.thread_failed {
+        if self.mode.candidate() && self.worker_join == WorkerJoin::Panicked {
             return Err(Error::Storage("engine_thread_failed"));
         }
         Ok(StopOutcome::Ordinary(StopReport {
@@ -579,12 +590,40 @@ impl CommandEngine {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
+    #[allow(
+        dead_code,
+        reason = "ordinary candidate physical cut remains unmounted"
+    )]
+    pub(crate) fn can_join_dispatcher_cut(&self, fatal: &crate::dispatcher_fatal::Fatal) -> bool {
+        fatal.is_tripped()
+            && self
+                .mode
+                .checked
+                .as_ref()
+                .is_some_and(|mode| mode.is_for(fatal))
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    #[allow(dead_code, reason = "registered stop is composed separately")]
+    pub(crate) fn worker_joined(&self) -> bool {
+        self.worker_join == WorkerJoin::Joined
+    }
+
+    #[cfg(all(
+        any(test, marmish_peer_receiver_candidate),
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
     #[allow(dead_code, reason = "candidate engine remains unmounted")]
     pub(crate) fn into_fatal_join(mut self) -> std::result::Result<FatalEngineJoin, Box<Self>> {
         if !self.mode.tripped() {
             return Err(Box::new(self));
         }
-        let join = FatalEngineJoin::new(self.thread.take(), self.thread_failed);
+        let join = FatalEngineJoin::new(self.thread.take(), self.worker_join);
         // Includes every request/control sender and the event receiver.
         drop(self);
         Ok(join)
@@ -621,7 +660,7 @@ impl CommandEngine {
             completions: VecDeque::new(),
             registered: BTreeMap::new(),
             thread: Some(worker),
-            thread_failed: false,
+            worker_join: WorkerJoin::Pending,
             mode: Mode::default(),
             readiness: Readiness::Ready,
             cleanup: CleanupState::Open,
@@ -1575,7 +1614,7 @@ mod tests {
                 completions: VecDeque::new(),
                 registered: BTreeMap::new(),
                 thread: None,
-                thread_failed: false,
+                worker_join: WorkerJoin::Pending,
                 mode: Mode::default(),
                 readiness: Readiness::Ready,
                 cleanup: CleanupState::Open,
@@ -1587,6 +1626,25 @@ mod tests {
             crx,
             tx,
         )
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn stop_proof_changes_only_after_the_worker_joins() {
+        let (mut without_worker, _operations, _controls, _events) = handle();
+        assert!(without_worker.shutdown(Instant::now()).unwrap().complete);
+        assert!(!without_worker.worker_joined());
+
+        let (release, held) = mpsc::channel();
+        let mut with_worker = CommandEngine::gated_stop_for_test(held);
+        assert!(!with_worker.shutdown(Instant::now()).unwrap().complete);
+        assert!(!with_worker.worker_joined());
+        release.send(()).unwrap();
+        let report = with_worker
+            .shutdown(Instant::now() + Duration::from_secs(1))
+            .unwrap();
+        assert!(report.complete);
+        assert!(with_worker.worker_joined());
     }
     fn ack(n: u8, decision: CommittedDecision) -> CommitAck {
         let op = operation(n, EngineOperation::Observe);

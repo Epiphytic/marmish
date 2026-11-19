@@ -24,3 +24,12 @@ Journal reopen checks.
 The connector is inert in this constructor proof. No active service,
 invitation actor, or Terminal is started. The daemon caller must run guarded
 native preflight with the same registration Admission and profile lease.
+
+Composition `038562c` keeps the reviewed constructor and custody source
+byte-identical. Strict engine and native Clippy passed in both stock and
+candidate builds. The exact candidate qualification passed in 114.83
+seconds. The stock archive passed 60 IPC tests with two opt-in cases
+skipped and all five checked Command startup cases. The independent
+composition reviewer repeated the native qualification and Journal suites
+on both exact archives. See the
+[review record](../reviews/peer-candidate-native-owner-startup.md).
