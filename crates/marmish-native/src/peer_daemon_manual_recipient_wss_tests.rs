@@ -14,6 +14,13 @@ use tokio::time::timeout_at;
 mod founder_fixture;
 use founder_fixture::{Delivered, FounderFixture};
 
+#[path = "peer_daemon_manual_refresh_benchmark.rs"]
+mod refresh_benchmark;
+use refresh_benchmark::RefreshLog;
+
+#[path = "peer_daemon_manual_copy_observation.rs"]
+mod exact_copy_observation;
+
 async fn acknowledge(report: &mut UnixStream) {
     timeout(STEP, report.write_all(b"A"))
         .await
@@ -99,7 +106,7 @@ fn manual_failure_log(log: &File) -> String {
         .join(", ")
 }
 
-async fn mounted() {
+async fn mounted(measure_near_cap: bool) {
     let example = PathBuf::from(std::env::var_os(EXAMPLE).expect("private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
     let daemon = PathBuf::from(std::env::var_os(DAEMON).expect("installed candidate daemon"));
@@ -159,6 +166,11 @@ async fn mounted() {
     assert_eq!(peer.qualification_connections(), recipient);
     let startup = startup.elapsed();
     unavailable(&socket).await;
+    if measure_near_cap {
+        RefreshLog::new(recipient_log.try_clone().unwrap())
+            .report_empty(&socket)
+            .await;
+    }
 
     let sender_ca = sender_dir.path().join("fixture-root.der");
     write_private(&sender_ca, ordinary.qualification_ca());
@@ -252,12 +264,37 @@ async fn mounted() {
     child.stop().await;
     let stopped = clock.elapsed();
     assert!(!socket.exists());
-    drop(ProfileLease::acquire_ready(root.path(), PROFILE).unwrap());
+    let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
+    let near_cap = measure_near_cap.then(|| {
+        let cold_identity = material(&mut cold_lease, &daemon);
+        assert_eq!(cold_identity.public_key(), signer);
+        let stage = crate::peer_invitation::near_cap_fixture::grow(
+            &cold_lease,
+            &cold_identity,
+            peer.url.as_str(),
+            &exact,
+        )
+        .expect("near-cap SQLCipher fixture prepared from witnessed Pending");
+        println!(
+            "manual_near_cap_original {}",
+            json!({
+                "logical_bytes": stage.logical_bytes(),
+                "allocated_bytes": stage.allocated_bytes(),
+                "page_count": stage.page_count(),
+                "page_size": stage.page_size(),
+                "freelist_pages": stage.freelist_pages(),
+            }),
+        );
+        stage
+    });
+    drop(cold_lease);
 
     // Reopen exactly the same profile with an independently started Manual
     // process before letting stock observe the ordinary retained results.
     let clock = Instant::now();
-    let (mut reopened, mut report, _) = provisional(&example, &args, root.path()).await;
+    let cold_log = tempfile::tempfile_in(root.path()).unwrap();
+    let (mut reopened, mut report, _) =
+        provisional_with_log(&example, &args, cold_log.try_clone().unwrap()).await;
     assert_eq!(peer.qualification_connections(), recipient + 1);
     unavailable(&socket).await;
     acknowledge(&mut report).await;
@@ -270,10 +307,32 @@ async fn mounted() {
         exact,
     );
     let cold_pending = clock.elapsed();
+    let mut qualification_passed = true;
+    if let Some(stage) = &near_cap {
+        qualification_passed = RefreshLog::new(cold_log).qualify(&socket, exact).await;
+        if let Err(reason) = exact_copy_observation::measure(
+            cursor.parent().unwrap(),
+            stage.identity(),
+            stage.logical_bytes(),
+            stage.allocated_bytes(),
+        )
+        .await
+        {
+            println!("manual_near_cap_copy_refused {reason}");
+            qualification_passed = false;
+        }
+    }
     assert_eq!(peer.all_publication_attempts(), 3);
     reopened.stop().await;
     assert!(!socket.exists());
-    drop(ProfileLease::acquire_ready(root.path(), PROFILE).unwrap());
+    let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
+    if let Some(stage) = near_cap {
+        let cold_identity = material(&mut cold_lease, &daemon);
+        stage
+            .assert_unchanged(&cold_lease, &cold_identity)
+            .expect("same closed encrypted original after installed cold validation");
+    }
+    drop(cold_lease);
 
     let clock = Instant::now();
     let mut stock = launch_stock(&daemon, root.path(), &ordinary, &ca);
@@ -298,10 +357,17 @@ async fn mounted() {
         cold_pending.as_millis(),
         cold.as_millis(),
     );
+    assert!(qualification_passed, "near-cap refresh or IPC gate failed");
 }
 
 #[test]
 #[ignore = "requires matching installed Linux AMD64 candidate and stock builds"]
 fn installed_registered_manual_pending_and_command() {
-    run_native(LIMIT, mounted);
+    run_native(LIMIT, || mounted(false));
+}
+
+#[test]
+#[ignore = "opt-in near-cap benchmark with matching installed Linux AMD64 candidate and stock builds"]
+fn installed_registered_manual_near_cap_refresh() {
+    run_native(LIMIT, || mounted(true));
 }
