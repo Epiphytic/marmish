@@ -292,6 +292,7 @@ async fn registration_requires_the_exact_lease_path_and_fatal_once() {
     let (paired, _worker) = pair(path, lease, readiness, fatal.clone());
     assert!(!paired.register(&listener, None));
     assert!(!paired.register(&listener, Some(&other_fatal)));
+    assert!(!paired.register(&wrong_listener, Some(&fatal)));
     assert!(!paired.0.state.lock().unwrap().registered);
     assert!(paired.register(&listener, Some(&fatal)));
     assert!(!paired.register(&listener, Some(&fatal)));
@@ -306,12 +307,14 @@ async fn claimed_busy_is_uncertain_and_worker_drop_wakes_an_open_exchange() {
     fixture.worker.try_claim().unwrap().refuse(Failure::Busy);
     let response: Response = read_frame(&mut socket).await.unwrap();
     assert_eq!(response.error.as_deref(), Some("operation_uncertain"));
+    assert!(fixture.pair.state.lock().unwrap().slot.is_none());
 
     let mut socket = fixture.socket(selector).await;
     fixture.submitted().await;
     let claim = fixture.worker.try_claim().unwrap();
     drop(fixture.worker);
     assert!(fixture.pair.is_closed());
+    assert!(fixture.pair.state.lock().unwrap().slot.is_none());
     assert!(!claim.check_live());
     assert!(claim.consume(&fixture.lease, selector).is_none());
     let received =
