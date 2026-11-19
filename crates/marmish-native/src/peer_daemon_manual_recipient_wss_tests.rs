@@ -521,3 +521,169 @@ fn installed_registered_manual_near_cap_refresh() {
 fn installed_registered_manual_approval_and_command() {
     run_native(LIMIT, || mounted(ManualCase::Approve));
 }
+
+struct ManualSchemaStartup<'a> {
+    example: &'a Path,
+    root: &'a Path,
+    socket: &'a Path,
+    peer: &'a Relay,
+    signer: PublicKey,
+}
+
+impl ManualSchemaStartup<'_> {
+    async fn matching(&self, args: &[OsString]) {
+        let recipient = self.peer.qualification_connections() + 1;
+        let (mut child, mut report, _) = provisional(self.example, args, self.root).await;
+        acknowledge(&mut report).await;
+        drop(report);
+        wait_active(&mut child, self.socket).await;
+        manual_recipient_live(self.peer, self.signer, recipient).await;
+        assert_eq!(self.peer.qualification_connections(), recipient);
+        child.stop().await;
+        assert!(!self.socket.exists());
+    }
+
+    async fn refused(&self, args: &[OsString], selection: crate::ipc::peer_approve::Selection) {
+        use crate::ipc::peer_approve::{self, Failure};
+
+        let connections = self.peer.qualification_connections();
+        let requests = self.peer.recipient_requests(self.signer);
+        let log = tempfile::tempfile_in(self.root).unwrap();
+        let (mut child, mut report, _) =
+            provisional_with_log(self.example, args, log.try_clone().unwrap()).await;
+        let task = recipient_task(child.0.id()).await;
+        acknowledge(&mut report).await;
+        drop(report);
+        wait_active(&mut child, self.socket).await;
+        eventually(
+            "mismatched Manual worker refused before ordinary stop",
+            || !task.try_exists().unwrap(),
+        )
+        .await;
+        assert!(active(self.socket).await);
+        unavailable(self.socket).await;
+        assert_eq!(
+            peer_approve::client_request(self.socket, selection).await,
+            Err(Failure::Unavailable),
+        );
+        child.stop().await;
+        assert!(!self.socket.exists());
+        drop(ProfileLease::acquire_ready(self.root, PROFILE).unwrap());
+
+        let mut bytes = vec![0; 64 * 1024];
+        let size = log.read_at(&mut bytes, 0).unwrap();
+        assert!(
+            String::from_utf8_lossy(&bytes[..size])
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .any(|line| line["stage"] == "registered_recipient"
+                    && line["category"] == "local_unavailable"),
+            "expected local recipient refusal",
+        );
+        assert_eq!(self.peer.qualification_connections(), connections);
+        assert_eq!(self.peer.recipient_requests(self.signer), requests);
+        assert_eq!(self.peer.all_publication_attempts(), 0);
+    }
+}
+
+async fn recipient_task(pid: u32) -> PathBuf {
+    let tasks = PathBuf::from(format!("/proc/{pid}/task"));
+    timeout(STEP, async {
+        loop {
+            for entry in std::fs::read_dir(&tasks).unwrap() {
+                let task = entry.unwrap().path();
+                // Linux task comm truncates the installed worker name to 15 bytes.
+                if std::fs::read(task.join("comm")).is_ok_and(|name| name == b"marmish-peer-re\n") {
+                    return task;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("owned Manual worker waits for startup acknowledgement")
+}
+
+async fn incompatible_manual_schemas() {
+    let example = PathBuf::from(std::env::var_os(EXAMPLE).expect("private example"));
+    assert_eq!(example.canonicalize().unwrap(), example);
+    let daemon = PathBuf::from(std::env::var_os(DAEMON).expect("installed candidate daemon"));
+    assert_eq!(layout().canonicalize().unwrap(), daemon);
+    crate::native_install::read_receipt(daemon.ancestors().nth(3).unwrap())
+        .expect("claimed installed candidate prefix");
+
+    for (matching, opposite) in [
+        ("--manual-recipient", "--manual-approval-recipient"),
+        ("--manual-approval-recipient", "--manual-recipient"),
+    ] {
+        reopen_manual_schema(&example, &daemon, matching, opposite).await;
+    }
+}
+
+async fn reopen_manual_schema(example: &Path, daemon: &Path, matching: &str, opposite: &str) {
+    use crate::ipc::peer_approve::Selection;
+
+    let parent = private();
+    let command = Keys::generate().public_key();
+    let founder = Keys::generate().public_key();
+    let mut ordinary = Relay::start().await;
+    let (mut peer, root, lease, identity) = qualified_manual_recipient_fixture(
+        founder,
+        Keys::generate().public_key(),
+        parent.path(),
+        Some((command, ordinary.url.as_str())),
+    )
+    .await;
+    assert_ne!(ordinary.url, peer.url);
+    let signer = identity.public_key();
+    ordinary.ordinary(signer);
+    ordinary.ordinary(command);
+    let socket = lease.socket_path();
+    let cursor = lease.root().join("peer/cursor.db");
+    drop((lease, identity));
+
+    let ca = root.path().join("fixture-root.der");
+    write_private(&ca, ordinary.qualification_ca());
+    let args = arguments(daemon, root.path(), &ordinary, &ca);
+    let startup = ManualSchemaStartup {
+        example,
+        root: root.path(),
+        socket: &socket,
+        peer: &peer,
+        signer,
+    };
+    let mut matching_args = args.clone();
+    matching_args.insert(0, matching.into());
+    startup.matching(&matching_args).await;
+    let cursor_bytes = std::fs::read(&cursor).unwrap();
+    assert!(!cursor_bytes.is_empty());
+
+    let mut opposite_args = args;
+    opposite_args.insert(0, opposite.into());
+    opposite_args.insert(0, "--debug".into());
+    startup
+        .refused(
+            &opposite_args,
+            Selection {
+                server: founder,
+                offer_id: [1; 32],
+                revision: [2; 32],
+                generation: 1,
+            },
+        )
+        .await;
+    assert!(
+        std::fs::read(&cursor).unwrap() == cursor_bytes,
+        "{opposite} changed the cursor created by {matching}",
+    );
+    startup.matching(&matching_args).await;
+    assert_eq!(peer.all_publication_attempts(), 0);
+    peer.stop().await;
+    ordinary.stop().await;
+}
+
+#[test]
+#[ignore = "opt-in Manual schema isolation over matching installed Linux AMD64 packages and private WSS"]
+fn installed_registered_manual_rejects_incompatible_schema() {
+    run_native(LIMIT, incompatible_manual_schemas);
+}
