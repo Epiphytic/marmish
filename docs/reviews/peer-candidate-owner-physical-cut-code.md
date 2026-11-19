@@ -28,3 +28,19 @@ test lifecycles or unrelated runtime changes.
 
 See [validation](../validation/peer-candidate-owner-physical-cut.md) for
 the stock runtime results and candidate compile checks.
+
+## Runner uncertainty amendment
+
+Claude Code Sonnet in Auto mode approved exact source
+`b071e45fec9efbe57721afdf385f677efd202f7d` in session
+`daa45305-8e96-46fa-9396-ea55f521aadd`. The review rechecked the runner marker
+and uncertainty ordering, physical engine join evidence, nested task and raw
+ownership, lease retention and cancellation safety. It also verified stock
+and candidate strict checks and reran five focused physical tests without the
+WSS fixture. The uncertain runner regression passed five additional runs.
+
+The reviewer suggested exercising a mixed runner set and a live OS child with
+unproved cleanup. The direct cut includes a real caught panic before spawn and
+a separate real reaped-child control. The full runner suite also exercises
+stale cleanup without an exit observation. This increment leaves the
+controlled live-child/process-hold proof to the reviewed daemon composition.
