@@ -169,8 +169,7 @@ impl<'lease> RecoveredOwner<'lease> {
         match observed {
             ManagedSaved::Waiting => Ok(SavedVisit::Waiting),
             ManagedSaved::Live(prepared) => {
-                let challenge = prepared.challenge();
-                let signed_end = challenge.deadline();
+                let signed_end = prepared.challenge().deadline();
                 let live = || {
                     if check()?.as_secs() >= signed_end {
                         return Err(CursorError::Stale.into());
@@ -180,7 +179,7 @@ impl<'lease> RecoveredOwner<'lease> {
                 let outcome = (|| -> Result<SavedVisit> {
                     live()?;
                     let scoped_window = window.clamp_signed(signed_end)?;
-                    let measured = port.use_delivery_native(challenge, |route| {
+                    let measured = port.use_delivery_native(prepared.challenge(), |route| {
                         self.measure_delivery_in_window(quota, route, scoped_window, &live)
                     })??;
                     port.use_saved_delivery(&saved, |checked| {
