@@ -119,6 +119,7 @@ async fn mounted() {
     let (mut peer, root, lease, identity) = qualified_both_command_fixture(
         sender,
         founder_key.public_key(),
+        Keys::generate().public_key(),
         parent.path(),
         ordinary.url.as_str(),
         &cat,

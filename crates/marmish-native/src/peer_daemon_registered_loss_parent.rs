@@ -220,6 +220,7 @@ async fn scenario(case: Scenario) {
     let (peer, state, lease, material) = crate::peer_relay_trust::qualified_both_command_fixture(
         principal,
         nostr::key::Keys::generate().public_key(),
+        nostr::key::Keys::generate().public_key(),
         private.path(),
         ordinary.url.as_str(),
         &cat,

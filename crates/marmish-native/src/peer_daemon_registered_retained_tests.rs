@@ -144,10 +144,15 @@ async fn retained() {
     let sender_socket = sender_lease.socket_path();
     let mut relay = Relay::start().await;
     let tee = std::fs::canonicalize("/usr/bin/tee").unwrap();
-    let third = nostr::key::Keys::generate().public_key();
-    let (mut peer_relay, root, lease, identity) =
-        qualified_both_command_fixture(sender_key, third, parent.path(), relay.url.as_str(), &tee)
-            .await;
+    let (mut peer_relay, root, lease, identity) = qualified_both_command_fixture(
+        sender_key,
+        nostr::key::Keys::generate().public_key(),
+        nostr::key::Keys::generate().public_key(),
+        parent.path(),
+        relay.url.as_str(),
+        &tee,
+    )
+    .await;
     assert_ne!(peer_relay.url, relay.url);
     let signer = identity.public_key();
     relay.ordinary(signer);

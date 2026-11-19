@@ -153,7 +153,8 @@ pub(crate) async fn qualified_recipient_fixture(
 ))]
 pub(crate) async fn qualified_both_command_fixture(
     command: PublicKey,
-    third: PublicKey,
+    founder: PublicKey,
+    extra_offer_writer: PublicKey,
     parent: &Path,
     ordinary_relay: &str,
     executable: &Path,
@@ -164,9 +165,11 @@ pub(crate) async fn qualified_both_command_fixture(
     IdentityMaterial,
 ) {
     assert_eq!(executable.canonicalize().unwrap(), executable);
+    assert_ne!(command, founder);
+    assert_ne!(command, extra_offer_writer);
     qualified_manual_fixture(
-        command,
-        third,
+        founder,
+        extra_offer_writer,
         parent,
         Some((command, ordinary_relay)),
         Some(executable),
