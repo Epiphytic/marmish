@@ -294,6 +294,14 @@ impl Checkpoint {
         key: Selector,
         wall: u64,
     ) -> Result<Offer> {
+        #[cfg(all(
+            any(test, marmish_peer_receiver_candidate),
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if self.is_installed_custody() {
+            return self.successor_live_offer(source, key, wall);
+        }
         self.with_installed_offer(source, key, wall, |codec, signer, route, row| {
             if wall >= row.expires {
                 return Err(Error::Expired);

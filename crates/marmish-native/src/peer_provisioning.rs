@@ -300,6 +300,18 @@ fn peer_provisioning_charge_handles_both_sql_bounds() {
     );
 }
 
+enum ReservationTurn {
+    ExistingOrNew(Option<bool>),
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    Manual {
+        fresh: bool,
+    },
+}
+
 impl Checkpoint {
     pub(crate) fn reserve_provisioning(
         &mut self,
@@ -311,7 +323,8 @@ impl Checkpoint {
             source,
             key,
             wall,
-            Some(self.policy.reserved.contains(&key.server)),
+            ReservationTurn::ExistingOrNew(Some(self.policy.reserved.contains(&key.server))),
+            || Ok(()),
         )
     }
 
@@ -321,7 +334,44 @@ impl Checkpoint {
         key: Selector,
         wall: u64,
     ) -> Result<Reservation> {
-        self.live_reservation(source, key, wall, None)
+        self.live_reservation(
+            source,
+            key,
+            wall,
+            ReservationTurn::ExistingOrNew(None),
+            || Ok(()),
+        )
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn reserve_manual_package(
+        &mut self,
+        source: &Source,
+        key: Selector,
+        wall: u64,
+        fresh: bool,
+        before_commit: impl FnOnce() -> Result<()>,
+    ) -> Result<Reservation> {
+        if !self.is_installed_custody()
+            || !matches!(
+                self.installed_receive_policy(),
+                Some(prepared_consent::custody::ReceivePolicy::Manual)
+            )
+            || self.policy.reserved.contains(&key.server)
+        {
+            return Err(Error::Policy);
+        }
+        self.live_reservation(
+            source,
+            key,
+            wall,
+            ReservationTurn::Manual { fresh },
+            before_commit,
+        )
     }
 
     fn live_reservation(
@@ -329,7 +379,8 @@ impl Checkpoint {
         source: &Source,
         key: Selector,
         wall: u64,
-        new_class: Option<bool>,
+        turn: ReservationTurn,
+        before_commit: impl FnOnce() -> Result<()>,
     ) -> Result<Reservation> {
         #[cfg(test)]
         let retirement_epoch = self.retirement_epoch;
@@ -337,15 +388,41 @@ impl Checkpoint {
         if retirement_epoch {
             retirement::verify_epoch(&self.cursor.conn)?;
         }
-        let (tx, origin, _) = self.live_provisioning_offer(source, key, wall, true)?;
+        let advance_on_expiry = matches!(turn, ReservationTurn::ExistingOrNew(_));
+        let (tx, origin, _) = self.live_provisioning_offer(source, key, wall, advance_on_expiry)?;
         if has_outbox(&tx, key, origin)? {
             return Err(CursorError::Conflict.into());
         }
-        let generation = match generation(&tx, key, origin)? {
-            Some(generation) => generation,
-            None => acquire(&tx, key, origin, new_class.ok_or(Error::Missing)?, wall)?,
+        let generation = match (turn, generation(&tx, key, origin)?) {
+            (ReservationTurn::ExistingOrNew(_), Some(generation)) => generation,
+            (ReservationTurn::ExistingOrNew(new_class), None) => {
+                acquire(&tx, key, origin, new_class.ok_or(Error::Missing)?, wall)?
+            }
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            (ReservationTurn::Manual { fresh: true }, None) => {
+                acquire(&tx, key, origin, false, wall)?
+            }
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            (ReservationTurn::Manual { fresh: false }, Some(generation)) if !generation.known => {
+                generation
+            }
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            (ReservationTurn::Manual { .. }, _) => return Err(CursorError::Stale.into()),
         };
         rows::advance_wall(&tx, wall)?;
+        before_commit()?;
         tx.commit()?;
         Ok(Reservation {
             owner: self.owner.clone(),

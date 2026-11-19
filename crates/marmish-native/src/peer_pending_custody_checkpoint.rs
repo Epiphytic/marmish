@@ -169,6 +169,14 @@ pub(crate) mod publication;
 #[path = "peer_receiver_inventory_store.rs"]
 pub(crate) mod receiver_inventory_store;
 
+#[cfg(all(
+    any(test, marmish_peer_receiver_candidate),
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_manual_work_checkpoint.rs"]
+pub(crate) mod manual_work;
+
 #[cfg(test)]
 #[path = "peer_daemon_checkpoint.rs"]
 pub(crate) mod daemon;

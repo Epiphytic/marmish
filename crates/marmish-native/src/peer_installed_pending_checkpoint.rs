@@ -10,6 +10,9 @@ use crate::{
     peer_quota_vfs::dispatch::ReceiverQuota,
 };
 
+#[cfg(marmish_peer_receiver_candidate)]
+use super::manual_work::require_sole_pending;
+
 #[cfg(test)]
 use crate::peer_invitation::receiver_inventory::v2_pending::record_custody_changes;
 
@@ -278,19 +281,6 @@ fn read_pending_custody_row(
         return Ok(None);
     }
     cx.read_evidence(tx, queued)
-}
-
-#[cfg(marmish_peer_receiver_candidate)]
-fn require_sole_pending(tx: &Transaction<'_>) -> Result<()> {
-    let pending: i64 = tx.query_row(
-        "SELECT count(*) FROM peer_pending_custody WHERE state=2",
-        [],
-        |row| row.get(0),
-    )?;
-    if pending != 1 {
-        return Err(CursorError::Stale.into());
-    }
-    Ok(())
 }
 
 // This module is mounted for Linux AMD64 native tests. Change

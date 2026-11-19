@@ -35,7 +35,11 @@ impl Checkpoint {
     }
 }
 
-fn class_charge(tx: &Transaction<'_>, origin: Origin, known: bool) -> Result<Option<Charge>> {
+pub(super) fn class_charge(
+    tx: &Transaction<'_>,
+    origin: Origin,
+    known: bool,
+) -> Result<Option<Charge>> {
     let (count, server, offer, revision, stored_origin) = tx.query_row(
         "SELECT generation,server,offer_id,revision,origin
            FROM peer_provisioning_slot WHERE class=?1",
