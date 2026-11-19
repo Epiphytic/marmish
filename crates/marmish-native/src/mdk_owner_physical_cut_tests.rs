@@ -79,7 +79,8 @@ impl Fixture {
         let config = CommandConfig::from_bytes(
             &serde_json::to_vec(&serde_json::json!({
                 "version":1, "role":"server", "relays":[relay_url], "tor":"off",
-                "cwd":"/", "limits":{}, "aliases":{},
+                "cwd":"/", "limits":{}, "aliases":{}, "trusted_remotes":[],
+                "command_policy":{"version":1},
                 "execution_clients":[hex::encode(execution_client)],
             }))
             .unwrap(),
@@ -264,8 +265,8 @@ async fn previously_closed_slots_remain_incomplete() {
     let fixture = Fixture::new();
     let (trip, fatal) = Trip::new();
     let connector = direct(&fixture, fatal);
+    let owner = fixture.open(connector.clone());
     connector.cancel();
-    let owner = fixture.open(connector);
     trip.trip();
     let mut cut = PhysicalCut::begin(owner, &fixture.lease).ok().unwrap();
     let report = cut.observe(deadline()).await;
