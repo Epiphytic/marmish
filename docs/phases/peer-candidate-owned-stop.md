@@ -56,26 +56,38 @@ nested forwarder proof and connector quiescence through the fields used by
 the physical cut. Do not use the stock shutdown that consumes or aborts
 those joins. Preserve the exact runner, SDK, forwarder and raw observations
 on the fatal transfer. A held join is always transferred and never launched
-again. Check exact Admission and Fatal before Journal close, native account
-close, and the final trusted runtime cleanup. Re-read the latch after each
-effect; a mid-effect cut retains indeterminate disposition even if that
-already-admitted synchronous effect ran. There is a check-to-unlink window
-in cleanup_runtime because it uses plain filesystem calls. It is the last
-effect and its outcome can only be published after the post-effect check.
+again. Journal close, native account close, and cleanup_runtime each require
+Complete listener, engine, runner, SDK, forwarder and raw obligations.
+A failed but exit-eligible stop skips all three effects. Check exact
+Admission and Fatal before each effect and read the latch on return. A cut
+during an already-admitted synchronous effect leaves its disposition
+indeterminate. For cleanup_runtime this window covers the entire call
+including inspection and each unlink. A cut at any step requires nonzero
+exit once physical barriers permit it, with the original lease still held.
+On ordinary success, the registered stop owner releases its lease only
+after the successful post-cleanup check.
 
 ## Disposition rules
 
 | Obligation | Complete evidence | Incomplete behavior |
 | --- | --- | --- |
 | IPC listener | Owned join returned normally and socket intake revoked | Listener panic or drain error is failure. This task owns no child in the registered Command path. Preserve unresolved socket evidence. |
-| Command engine | Absent with NeverStarted proof, or actual engine join with retained outcome | Pending blocking turn or lost engine/worker ownership is possibly active. A normal worker thread join returning engine_thread_failed is a failed stop, and is exit-eligible only with independent child evidence. |
-| Stream runner | Finished marker plus snapshot without uncertainty | A pending marker, try_exit failure, or caught panic with uncertain snapshot can mean a live child. Preserve the process and flock until actual reap evidence. |
+| Command engine | Explicit NeverStarted, or explicit Joined with actual worker join and StopReport.complete and StopReport.quiesced both true | Pending turn, lost ownership, and engine_thread_failed are uncertain without independent evidence about children. No such independent evidence is available in this path. A complete, joined report with quiesced false proves physical completion but fails the cleanup handshake and skips the three destructive effects. |
+| Stream runner | Complete from the corrected leaf's single tri-state observation | FailedNoChild permits nonzero exit when all other barriers allow it. Uncertain holds the process and lease. While unfinished, keep the observation retryable. |
 | SDK and nested forwarder | Actual successful shutdown and nested forwarder join | JoinError or lost handle is incomplete. A pending or lost task is retained as possibly active until there is independent end evidence. Outer abort alone proves neither. |
 | Raw transport | All selected raw ownership slots confirmed released | Retain unresolved socket evidence. Incomplete raw state produces failure even after all child and task obligations have positive evidence. |
 | Journal, account, runtime | Each trusted operation guarded and completed without a post-cut observation | Preserve remaining database roots, runtime evidence, and lease until process exit. Report an error even if every owned execution obligation is physically complete. |
 
 Partition every settled result into complete, failed but no remaining
 child/task possible, or uncertain with possibly active ownership.
+Record Joined only from the worker thread join evidence. The join for
+the blocking observer merely returns the engine and its typed result.
+A missing thread field supplies no worker evidence. A stop report with
+complete false also supplies no worker join evidence. The runner observation
+reads the finished marker with Acquire before checking that the snapshot is
+neither uncertain nor terminal Failed. In the current leaf every terminal
+Failed outcome carries uncertainty, so FailedNoChild has no current runner
+producer.
 Healthy stop can report success only with all required proofs. Even without
 a fatal trip, a failed but exit-eligible stop retains roots and the flock
 through nonzero process exit. An uncertain healthy stop holds the lease
@@ -107,7 +119,9 @@ diagnostics after a bounded observation and continue observing pending
 live-child obligations in one-second turns, rate-limiting repeated
 diagnostics. If a barrier becomes permanently uncertain with a possibly
 live child, keep the original process and flock alive and expose that
-outcome through diagnostics. External forced termination leaves it
+outcome through diagnostics. This can hold indefinitely even in cases
+where the child was already reaped and an observation failed before recording
+the proof. External forced termination leaves it
 unresolved and must never be represented as a successful stop.
 
 When the native roots have been parked, every owned child is positively
@@ -131,9 +145,11 @@ connector shutdown. Synchronize a held child after cancellation: verify the
 process stays up with the lease and an incomplete diagnostic, then releases
 only after observed child release. Inject a runner exit-observation failure
 or panic and ensure an uncertain runner cannot authorize exit. Interrupt an
-engine turn in flight and between turns, inject a panic that loses engine
+engine turn in flight and between turns, cover Ordinary with complete true
+and quiesced false, inject a panic that loses engine
 ownership, force a full event queue during healthy stop, and trip after the
 SDK task starts. A failed observer never supplies missing child or nested
-task evidence. Assert that no independently handed-off finite worker inherits
+task evidence. Cut during runtime cleanup and assert a nonzero exit with
+partially removed runtime contents. Assert that no independently handed-off finite worker inherits
 the daemon flock descriptor. Preserve existing stock Linux and macOS stop
 regressions. Obtain exact Claude Code Auto review.
