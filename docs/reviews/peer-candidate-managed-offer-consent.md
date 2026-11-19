@@ -69,3 +69,10 @@ and the queue/recovery scenario in about 45 s using the archived author
 executable. The author recorded the producing command, revision and SHA-256
 in the validation evidence. The final review did not repeat strict lint,
 the complete standalone harness or the full WSS matrix.
+
+Claude Code Sonnet in Auto mode approved composed source
+`e080e804dfbf84713f70533d6a5162303f7456c2` in session
+`1ee4dcda-0a47-412c-9f61-ef255fb0d11d`. The reviewer verified the
+archive source stamp, read the merged shared receiver inventory and
+reran the exclusive deadlines test. The independent composed review
+did not rerun WSS. The author ran the WSS and restart cases below.

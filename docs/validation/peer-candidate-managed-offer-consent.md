@@ -112,3 +112,15 @@ passed both restart scenarios in 48.72 s. The two cold migration samples
 were 14.26 s and 13.77 s. Queue and post-commit stop took 310.880 ms and
 189.370 ms. The charged reservations took 502.445 ms and 467.030 ms.
 Claude's independent final rerun also passed the queue group.
+
+## Exact ordinary native startup composition
+
+Linux AMD64 composed source `e080e804dfbf84713f70533d6a5162303f7456c2`
+passed stock and candidate strict Clippy in 32.64 and 33.46 seconds
+respectively. The candidate link took 48.44 seconds. The candidate
+archive passed the managed Consent opt-in filter in 82.11 seconds,
+including five private WSS cases and both restart scenarios.
+Local acknowledgment samples were 47.271–49.398 ms. Queue and post-commit
+stop took 244.587 and 150.418 ms, with no change to the 2,416,640-byte
+stage image. This test drives prepared Consent against the real store
+and relay. It does not exercise same-port actor publication or Delivery.
