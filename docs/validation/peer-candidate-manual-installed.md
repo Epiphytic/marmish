@@ -36,6 +36,21 @@ read exactly the two retained ordinary command results.
 | Cold Manual reopen to exact Pending | 6,455 ms |
 | Cold stock reopen and ordinary result validation | 290 ms |
 
+An independent Passive controller passed in 29.86 seconds with the same
+installed artifacts. Its Peer access acknowledgement took 149 ms. Ordinary
+commands completed in 4,938 ms with the Peer route active and 1,767 ms
+after disconnection. The daemon stopped in 77 ms. These are individual
+observations over loopback WSS.
+
+| Installed artifact SHA-256 | Candidate | Stock |
+| --- | --- | --- |
+| Release manifest | `4eff977d0cf9ec6046b83139a0627217f1cb7406bc086956bc7194f412fe59ed` | `6a7dd1da94d7371a1914c45225d73c76390191ca5e7125b82b399004dfa8ded2` |
+| Daemon | `bbb620c9bf0913451e526fb0475304beea7cb963017db34b078674de11e68b56` | `127d75c704ed59b1dbffc77b741c9162f3524360b6fc906b5789cec398648a68` |
+| Controller libtest | `b981929f2484e4d3c129bc6cd359505bd2a1bd9573ba1e225a4d7179eef2b323` | `942c4ab3b4598aa9ab13be3ae313451c2cd6436b3b9c0afacb9c3ac5315f5aec` |
+
+Private qualification helper SHA-256
+`dc85a0060760428d96d112580eab01f992ef708b6bcc45d59053272d915f4711`.
+
 Earlier runs at `1be3388` and `a73c9af` reached the authenticated live
 route but timed out waiting for Consent. The fixture had put the ordinary
 command identity in the relay's primary founder slot. Its extra writer
