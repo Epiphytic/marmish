@@ -53,7 +53,9 @@ the user changes it.
    interfaces and disjoint file ownership. Coordinate integration centrally;
    avoid overwriting another agent's work. Use isolated worktrees when branches
    or task isolation require them. Preserve unrelated user changes and sibling
-   repository work.
+   repository work. Retire each scratch worktree after its changes and evidence
+   are safely recorded and its last build or review ends. Use
+   `git worktree remove` and preserve any dirty, locked or in-use checkout.
 5. **Validate the result.** Run checks appropriate to the change and the phase's
    acceptance criteria. For transport changes, use actual client/server command
    execution through Marmot, not just mocks or successful relay publication.
