@@ -3,7 +3,10 @@
 use super::*;
 use crate::{
     diagnostics::pending_refresh::{self, Outcome, Timing, nanos},
-    ipc::peer_read::pending_view::AcceptedTiming,
+    ipc::{
+        peer_approve::Failure as ApprovalReply, peer_approve_listener::Worker as ApprovalWorker,
+        peer_read::pending_view::AcceptedTiming,
+    },
     peer_candidate_startup::Readiness,
     peer_invitation::{
         receiver_inventory::{
@@ -12,7 +15,11 @@ use crate::{
             manual_work::{ManualDue, ManualPackageGuard},
             v2_pending::{PendingClock, PendingTurn},
         },
-        socket::owner::recipient::managed_consent::{Publication, Wake},
+        socket::{
+            owner::recipient::managed_consent::{Publication, Wake},
+            wire::Failure as PortFailure,
+        },
+        store::consent_checkpoint::provisioning::prepared_consent::custody::ApprovalFailure,
     },
 };
 
@@ -21,11 +28,12 @@ const PROBE: Duration = Duration::from_millis(20);
 
 pub(super) async fn serve<'profile>(
     owner: &mut RecoveredOwner<'profile>,
-    lease: &'profile ProfileLease,
+    lease: &'profile Arc<ProfileLease>,
     quota: &ReceiverQuota<'profile>,
     port: &mut PeerRecipientPort,
     fence: &mut StartupFence<'_>,
     producer: Producer,
+    approval: Option<ApprovalWorker>,
 ) -> Exit {
     let stop = fence.manual_stop.expect("Manual worker owns its stop cell");
     let stop_on_exit = StopOnExit(Some(stop));
@@ -37,6 +45,7 @@ pub(super) async fn serve<'profile>(
         fence,
         stop,
         producer,
+        approval,
     };
     let readiness = service.fence.ready.readiness();
     let exit = match service.run(readiness).await {
@@ -49,12 +58,13 @@ pub(super) async fn serve<'profile>(
 
 struct ManualService<'turn, 'profile, 'guard> {
     owner: &'turn mut RecoveredOwner<'profile>,
-    lease: &'profile ProfileLease,
+    lease: &'profile Arc<ProfileLease>,
     quota: &'turn ReceiverQuota<'profile>,
     port: &'turn mut PeerRecipientPort,
     fence: &'turn mut StartupFence<'guard>,
     stop: &'guard Arc<AtomicBool>,
     producer: Producer,
+    approval: Option<ApprovalWorker>,
 }
 
 impl ManualService<'_, '_, '_> {
@@ -116,6 +126,7 @@ impl ManualService<'_, '_, '_> {
         let mut history_complete = false;
         loop {
             self.check()?;
+            let mut approval_claimed = history_complete && self.service_approval(&readiness)?;
             if !history_complete {
                 let history = tokio::select! {
                     biased;
@@ -127,6 +138,9 @@ impl ManualService<'_, '_, '_> {
                 history_complete =
                     history.map_err(|error| self.effect_failed("manual_history", error))?;
                 self.check()?;
+                if history_complete {
+                    approval_claimed = self.service_approval(&readiness)?;
+                }
             }
 
             let now = Instant::now();
@@ -160,7 +174,10 @@ impl ManualService<'_, '_, '_> {
                 .map_err(|error| self.effect_failed("manual_live", error))?
                 .is_some();
             self.check()?;
-            if live_changed && schedule.saved_retry <= Instant::now() {
+            let approval_after_live =
+                history_complete && !approval_claimed && self.service_approval(&readiness)?;
+            approval_claimed |= approval_after_live;
+            if (live_changed || approval_after_live) && schedule.saved_retry <= Instant::now() {
                 saved = self
                     .owner
                     .probe_due_managed_delivery(self.port)
@@ -191,16 +208,22 @@ impl ManualService<'_, '_, '_> {
                     | SavedVisit::Reobserve => {}
                 }
             }
-            if (live_changed || saved_visited) && schedule.managed_retry <= Instant::now() {
+            if (live_changed || approval_after_live || saved_visited)
+                && schedule.managed_retry <= Instant::now()
+            {
                 managed = self
                     .owner
                     .due_manual_work(self.port)
                     .map_err(|error| self.effect_failed("manual_work", error))?;
             }
+            let managed_visited = managed.is_some();
             if let Some(managed) = managed
                 && self.managed(managed, &readiness).await?
             {
                 schedule.managed_retry = schedule.next(Instant::now());
+            }
+            if history_complete && !approval_claimed && (saved_visited || managed_visited) {
+                self.service_approval(&readiness)?;
             }
             if let Some(tick) = schedule.tick(Instant::now())
                 && history_complete
@@ -215,6 +238,45 @@ impl ManualService<'_, '_, '_> {
                 result?;
             }
         }
+    }
+
+    fn service_approval(&mut self, readiness: &Readiness) -> Result<bool, Exit> {
+        let Some(request) = self.approval.as_ref().and_then(ApprovalWorker::try_claim) else {
+            return Ok(false);
+        };
+        let Ok(mut pending) = PendingTurn::borrow(self.owner, self.lease) else {
+            self.check_approval_port()?;
+            crate::diagnostics::event("manual_approval", "owner_integrity");
+            request.refuse(ApprovalReply::Unavailable);
+            return Err(self.local_failure());
+        };
+
+        self.producer.invalidate();
+        let settlement = pending.approve(
+            self.lease,
+            self.port,
+            request,
+            PendingClock::Candidate {
+                readiness,
+                stop: self.stop,
+                forwarding: Some(self.fence.forwarding),
+            },
+        );
+        let failure = approval_stop_category(settlement.result());
+        self.check_approval_port()?;
+        settlement.respond();
+        if let Some(category) = failure {
+            crate::diagnostics::event("manual_approval", category);
+            return Err(self.local_failure());
+        }
+        Ok(true)
+    }
+
+    fn check_approval_port(&mut self) -> Result<(), Exit> {
+        self.check()?;
+        let current = self.port.use_current_native(|_| ());
+        self.check()?;
+        current.map_err(|_| Exit::LocalUnavailable)
     }
 
     async fn managed(&mut self, work: ManualDue, readiness: &Readiness) -> Result<bool, Exit> {
@@ -343,6 +405,21 @@ impl ManualService<'_, '_, '_> {
     }
 }
 
+fn approval_stop_category(
+    result: Result<Result<(), ApprovalFailure>, PortFailure>,
+) -> Option<&'static str> {
+    match result {
+        Ok(
+            Ok(())
+            | Err(ApprovalFailure::Stale | ApprovalFailure::Expired | ApprovalFailure::Unavailable),
+        ) => None,
+        Ok(Err(ApprovalFailure::Integrity)) => Some("integrity"),
+        Ok(Err(ApprovalFailure::Clock)) => Some("clock_regressed"),
+        Ok(Err(ApprovalFailure::Ambiguous)) => Some("commit_uncertain"),
+        Err(_) => Some("port_unavailable"),
+    }
+}
+
 fn classify_stop(fatal: bool, cell: bool, cancelled: bool, ready: bool) -> Option<Exit> {
     if fatal {
         Some(Exit::GlobalFault)
@@ -442,6 +519,26 @@ mod tests {
             Some(Exit::Stopped)
         );
         assert_eq!(classify_stop(false, false, false, true), None);
+    }
+
+    #[test]
+    fn manual_approval_distinguishes_refusal_from_local_lane_stop() {
+        for result in [
+            Ok(Ok(())),
+            Ok(Err(ApprovalFailure::Stale)),
+            Ok(Err(ApprovalFailure::Expired)),
+            Ok(Err(ApprovalFailure::Unavailable)),
+        ] {
+            assert_eq!(approval_stop_category(result), None);
+        }
+        for (result, category) in [
+            (Ok(Err(ApprovalFailure::Integrity)), "integrity"),
+            (Ok(Err(ApprovalFailure::Clock)), "clock_regressed"),
+            (Ok(Err(ApprovalFailure::Ambiguous)), "commit_uncertain"),
+            (Err(PortFailure::Retired), "port_unavailable"),
+        ] {
+            assert_eq!(approval_stop_category(result), Some(category));
+        }
     }
 
     #[test]
