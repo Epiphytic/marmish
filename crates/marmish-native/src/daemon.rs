@@ -167,6 +167,7 @@ async fn open_inner(
         prepared,
         connector,
         terminal,
+        None,
         #[cfg(test)]
         fixture,
     )
@@ -176,6 +177,7 @@ fn open_stock(
     prepared: PreparedProfile,
     connector: RelayConnector,
     terminal: bool,
+    installed_daemon: Option<&std::path::Path>,
     #[cfg(test)] fixture: Option<FixtureTransport<'_>>,
 ) -> Result<Opened> {
     let PreparedProfile {
@@ -228,11 +230,17 @@ fn open_stock(
     #[cfg(test)]
     let peer_role = commands.as_ref().map(|config| config.role());
     if let Some(commands) = commands {
-        let executable = std::env::current_exe()?;
-        let executable = executable.as_path();
         #[cfg(test)]
-        let executable = fixture.map_or(executable, |fixture| fixture.layout);
-        let worker = crate::native_layout::resolve(executable)?.worker;
+        let installed_daemon = fixture.map(|fixture| fixture.layout).or(installed_daemon);
+        let executable;
+        let installed_daemon = match installed_daemon {
+            Some(installed_daemon) => installed_daemon,
+            None => {
+                executable = std::env::current_exe()?;
+                executable.as_path()
+            }
+        };
+        let worker = crate::native_layout::resolve(installed_daemon)?.worker;
         owner.enable_commands(&profile, &material, commands, worker)?;
         owner.command_set_lifetime(lifetime);
     }

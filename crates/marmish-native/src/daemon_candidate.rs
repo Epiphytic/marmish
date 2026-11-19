@@ -5,25 +5,27 @@ use crate::{
     command_config::CommandConfig,
     command_engine::Admission,
     command_limits::ServiceLifetime,
+    daemon_launch::{
+        StartupReporter,
+        candidate_child::{ChildChannel, Interrupt},
+    },
     dispatcher_fatal::Fatal,
     identity::{IdentityMaterial, ProfileLease},
+    ipc::{self, Pending, Request, Response},
     mdk_adapter::MdkOwner,
     peer_relay_trust::candidate_registration::{
         ReceiverPreflight, RegisteredReceiver, RegistrationFailure,
     },
     transport::RelayConnector,
 };
-use crate::{
-    daemon_launch::candidate_child::{ChildChannel, Interrupt},
-    ipc::{self, Pending, Request, Response},
-};
 use std::{
     future::{Future, poll_fn},
+    path::Path,
     pin::{Pin, pin},
+    sync::Arc,
     task::Context,
     time::Duration,
 };
-use std::{path::Path, sync::Arc};
 use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinHandle,
@@ -44,7 +46,7 @@ struct RegisteredStartup {
     peers: Vec<String>,
     commands: CommandConfig,
     lifetime: Arc<ServiceLifetime>,
-    retention: std::time::Duration,
+    retention: Duration,
 }
 
 struct RegisteredOwner {
@@ -524,6 +526,7 @@ pub(crate) async fn run(
                 prepared,
                 connector,
                 true,
+                Some(executable),
                 #[cfg(test)]
                 None,
             )?;
