@@ -227,6 +227,19 @@ fn approval_prewrite_clock_and_exact_retry_leave_the_row_and_floors_unchanged() 
         );
         assert_eq!(case.snapshot(), before);
     }
+    assert_eq!(
+        case.record(
+            case.generation,
+            at,
+            |step| match step {
+                ApprovalGuard::Consume => Err(ApprovalFailure::Unavailable),
+                ApprovalGuard::Verify => panic!("refusal reached final verification"),
+            },
+            |_| panic!("refusal wrote"),
+        ),
+        Err(ApprovalFailure::Unavailable),
+    );
+    assert_eq!(case.snapshot(), before);
     case.record(case.generation, at, |_| Ok(at), |_| Ok(()))
         .unwrap();
     let after = case.snapshot();

@@ -87,8 +87,15 @@ fn joined_failure(
     }
     match error {
         Error::Clock => ApprovalFailure::Clock,
-        Error::Path | Error::StageIdentityMismatch => ApprovalFailure::Integrity,
-        _ => ApprovalFailure::Stale,
+        Error::Binding | Error::Native(StageError::Invalid) => ApprovalFailure::Stale,
+        Error::RetirementBusy | Error::Socket(_) | Error::Native(StageError::Unavailable) => {
+            ApprovalFailure::Unavailable
+        }
+        Error::Path
+        | Error::StageIdentityMismatch
+        | Error::Cursor(_)
+        | Error::Checkpoint(_)
+        | Error::Native(StageError::Storage) => ApprovalFailure::Integrity,
     }
 }
 
@@ -306,6 +313,22 @@ mod tests {
                 ),
                 (Error::Path, true, ApprovalFailure::Integrity),
                 (Error::Binding, true, ApprovalFailure::Stale),
+                (
+                    Error::Native(StageError::Invalid),
+                    true,
+                    ApprovalFailure::Stale,
+                ),
+                (
+                    Error::Native(StageError::Storage),
+                    true,
+                    ApprovalFailure::Integrity,
+                ),
+                (
+                    Error::Native(StageError::Unavailable),
+                    true,
+                    ApprovalFailure::Unavailable,
+                ),
+                (Error::RetirementBusy, true, ApprovalFailure::Unavailable),
                 (Error::Clock, true, ApprovalFailure::Clock),
                 (Error::Binding, false, ApprovalFailure::Unavailable),
             ] {
