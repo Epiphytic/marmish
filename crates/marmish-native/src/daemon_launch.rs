@@ -271,6 +271,17 @@ fn spawn_child(
     grace: Duration,
     child_mask: Option<libc::sigset_t>,
 ) -> Result<(OwnedChild, UnixStream)> {
+    spawn_child_with_marker(executable, argv, log, grace, child_mask, MARKER_VALUE)
+}
+
+fn spawn_child_with_marker(
+    executable: &Path,
+    argv: &[OsString],
+    log: File,
+    grace: Duration,
+    child_mask: Option<libc::sigset_t>,
+    marker: &str,
+) -> Result<(OwnedChild, UnixStream)> {
     let (parent, child) = UnixStream::pair()?;
     set_cloexec(parent.as_raw_fd())?;
     set_cloexec(child.as_raw_fd())?;
@@ -286,7 +297,7 @@ fn spawn_child(
     let mut command = Command::new(executable);
     command
         .args(argv)
-        .env(MARKER, MARKER_VALUE)
+        .env(MARKER, marker)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log));
@@ -327,6 +338,15 @@ fn inherit_channel(source: RawFd) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "daemon_launch_candidate_parent.rs"]
+pub(crate) mod candidate_parent;
 
 fn await_startup(mut child: OwnedChild, mut channel: UnixStream, budget: Duration) -> Result<()> {
     let end = Instant::now() + budget;
