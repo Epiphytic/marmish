@@ -13,7 +13,22 @@ use crate::{
     },
     transport::RelayConnector,
 };
+use crate::{
+    daemon_launch::candidate_child::{ChildChannel, Interrupt},
+    ipc::{self, Pending, Request, Response},
+};
+use std::{
+    future::{Future, poll_fn},
+    pin::{Pin, pin},
+    task::Context,
+    time::Duration,
+};
 use std::{path::Path, sync::Arc};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+    time::{Instant, MissedTickBehavior},
+};
 
 enum Selection {
     Stock(PreparedProfile, RelayConnector),
@@ -173,22 +188,6 @@ impl RegisteredStartup {
     }
 }
 
-use crate::{
-    daemon_launch::candidate_child::{ChildChannel, Interrupt},
-    ipc::{self, Pending, Request, Response},
-};
-use std::{
-    future::{Future, poll_fn},
-    pin::{Pin, pin},
-    task::Context,
-    time::Duration,
-};
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::JoinHandle,
-    time::{Instant, MissedTickBehavior},
-};
-
 #[derive(Default)]
 struct Listener {
     drain: Option<oneshot::Sender<()>>,
@@ -237,6 +236,15 @@ impl Listener {
             self.task = None;
         }
         self.outcome.is_some()
+    }
+
+    async fn wait_until(&mut self, deadline: Instant) {
+        if let Some(task) = self.task.as_mut()
+            && let Ok(outcome) = tokio::time::timeout_at(deadline, task).await
+        {
+            self.outcome = Some(outcome);
+            self.task = None;
+        }
     }
 
     fn start_drain(&mut self) {
@@ -451,5 +459,153 @@ fn report_failure(failure: crate::daemon_launch::candidate_child::Failure) -> Er
         Failure::Acknowledgement | Failure::ParentEof | Failure::Socket(_) => {
             Error::DaemonStartup("registered readiness exchange failed".into())
         }
+    }
+}
+
+pub(crate) async fn run(
+    config: super::Config,
+    startup: Option<StartupReporter>,
+    executable: &Path,
+    fixture_roots: Option<Vec<rustls::pki_types::CertificateDer<'static>>>,
+) -> Result<()> {
+    let channel = startup.as_ref().map(ChildChannel::take).transpose()?;
+    let origin = ServiceLifetime::start(None)?;
+    let (prepared, eligible) = tokio::task::spawn_blocking(move || {
+        let loaded = LoadedProfile::load(config, origin)?;
+        let eligible = eligible(&loaded);
+        Ok::<_, Error>((loaded.prepare()?, eligible))
+    })
+    .await
+    .map_err(|_| Error::Identity("initialization_worker"))??;
+    let connector = match fixture_roots {
+        None => prepared.relay_connector()?,
+        Some(certificates) => {
+            let policy = prepared.loaded.policy.clone();
+            let [url] = policy.urls() else {
+                return Err(Error::Invalid("fixture_relay_trust"));
+            };
+            let url = url.clone();
+            let mut roots = rustls::RootCertStore::empty();
+            for certificate in certificates {
+                roots
+                    .add(certificate)
+                    .map_err(|_| Error::Invalid("fixture_relay_trust"))?;
+            }
+            let lease = &prepared.loaded.lease;
+            RelayConnector::for_loopback_fixture(
+                policy,
+                crate::transport::ArtiDirs {
+                    state: lease.arti_state().to_owned(),
+                    cache: lease.arti_cache().to_owned(),
+                },
+                url,
+                roots,
+            )?
+        }
+    };
+    match select(prepared, connector, eligible)? {
+        Selection::Stock(prepared, connector) => {
+            if channel.is_some() {
+                return Err(Error::Invalid("candidate_startup_not_registered"));
+            }
+            let opened = super::open_stock(
+                prepared,
+                connector,
+                true,
+                #[cfg(test)]
+                None,
+            )?;
+            super::serve_opened(
+                opened,
+                None,
+                #[cfg(test)]
+                None,
+                #[cfg(test)]
+                None,
+            )
+            .await
+        }
+        Selection::Indeterminate(lease) => {
+            drop(channel);
+            crate::diagnostics::event("registered_shutdown", "registration_indeterminate");
+            std::mem::forget(lease);
+            std::process::exit(1);
+        }
+        Selection::Registered(registered) => {
+            let (mut custody, result) = registered.open(executable);
+            let mut listener = Listener::default();
+            let result = match result {
+                Ok(()) => custody.serve(&mut listener, channel).await,
+                Err(error) => {
+                    if let Some((channel, admission)) = channel.zip(custody.admission.as_ref()) {
+                        channel.fail_before_offer(admission);
+                    }
+                    Err(error)
+                }
+            };
+            finish(custody, listener, result).await
+        }
+    }
+}
+
+async fn finish(
+    mut custody: RegisteredOwner,
+    mut listener: Listener,
+    result: Result<()>,
+) -> Result<()> {
+    use crate::mdk_adapter::healthy_stop::HealthyStop;
+
+    listener.start_drain();
+    let Some(owner) = custody.owner.take() else {
+        // A canceled or failed guarded open owns its partial resources. Its
+        // startup adapter has disposed or parked each root and notifier.
+        crate::diagnostics::event("registered_shutdown", "native_startup_failed");
+        std::mem::forget(custody);
+        std::process::exit(1);
+    };
+    let Some(admission) = custody.admission.as_ref() else {
+        retain_unproved((custody, listener, owner)).await;
+    };
+    let mut stop = match HealthyStop::begin(owner, &custody.lease, admission) {
+        Ok(stop) => stop,
+        Err(owner) => retain_unproved((custody, listener, owner)).await,
+    };
+
+    let began = Instant::now();
+    let mut last_notice = None;
+    loop {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let (owner, ()) = tokio::join!(stop.observe(deadline), listener.wait_until(deadline));
+        if listener.task.is_none() && !owner.physical.requires_process_hold() {
+            let listener_clean = listener
+                .outcome
+                .as_ref()
+                .is_none_or(|outcome| matches!(outcome, Ok(Ok(()))));
+            if listener_clean && owner.graceful_complete && !owner.fatal {
+                match stop.complete(|| custody.lease.cleanup_runtime()) {
+                    Ok(()) => return result,
+                    Err(parked) => stop = *parked,
+                }
+            }
+            crate::diagnostics::event("registered_shutdown", "owned_stop_failed");
+            std::mem::forget((custody, listener, stop));
+            std::process::exit(1);
+        }
+        let now = Instant::now();
+        if now.duration_since(began) >= Duration::from_secs(15)
+            && last_notice.is_none_or(|then| now.duration_since(then) >= Duration::from_secs(30))
+        {
+            crate::diagnostics::event("registered_shutdown", "owned_stop_incomplete");
+            last_notice = Some(now);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn retain_unproved<T>(custody: T) -> ! {
+    std::mem::forget(custody);
+    crate::diagnostics::event("registered_shutdown", "owned_stop_unproved");
+    loop {
+        std::future::pending::<()>().await;
     }
 }

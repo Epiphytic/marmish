@@ -21,13 +21,12 @@ use tokio::{
 pub(crate) mod candidate_lifecycle;
 
 #[cfg(all(
-    test,
     marmish_peer_receiver_candidate,
     target_os = "linux",
     target_arch = "x86_64"
 ))]
 #[path = "daemon_candidate.rs"]
-mod registered;
+pub(crate) mod registered;
 
 pub struct Config {
     pub state_dir: PathBuf,

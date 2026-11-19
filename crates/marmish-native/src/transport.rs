@@ -288,7 +288,10 @@ struct ConnectorState {
     fatal: Option<Fatal>,
     #[cfg(test)]
     direct_attempts: Arc<std::sync::atomic::AtomicUsize>,
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
     fixture_roots: Option<Vec<(Url, rustls::RootCertStore)>>,
 }
 
@@ -466,7 +469,10 @@ impl RelayConnector {
             fatal: None,
             #[cfg(test)]
             direct_attempts: Arc::default(),
-            #[cfg(test)]
+            #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
             fixture_roots: None,
         })))
     }
@@ -476,7 +482,10 @@ impl RelayConnector {
         self.0.direct_attempts.load(Ordering::Relaxed)
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
     pub(crate) fn for_loopback_fixture(
         policy: RelayPolicy,
         dirs: ArtiDirs,
@@ -486,7 +495,10 @@ impl RelayConnector {
         Self::for_loopback_fixtures(policy, dirs, vec![(url, roots)])
     }
 
-    #[cfg(test)]
+    #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
     pub(crate) fn for_loopback_fixtures(
         policy: RelayPolicy,
         dirs: ArtiDirs,
@@ -767,7 +779,10 @@ impl RelayConnector {
             return Err(Error::Transport("proxy_forbidden"));
         }
         let (index, route) = self.policy().destination(url)?;
-        #[cfg(test)]
+        #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
         if let Some(roots) = &self.0.fixture_roots
             && !roots.iter().any(|(fixture_url, _)| fixture_url == url)
         {
@@ -962,7 +977,10 @@ impl RelayConnector {
             }
             return self.websocket(url, stream, permit).await;
         }
-        #[cfg(test)]
+        #[cfg(any(
+        test,
+        all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64")
+    ))]
         if let Some(roots) = &self.0.fixture_roots {
             let (_, roots) = roots
                 .iter()
