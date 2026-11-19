@@ -188,6 +188,6 @@ impl<'a> FounderFixture<'a> {
     }
 }
 
-fn wall() -> u64 {
+pub(super) fn wall() -> u64 {
     Wall::System.sample().expect("fixture wall").as_secs()
 }

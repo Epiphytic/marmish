@@ -59,6 +59,10 @@ impl FollowUp<'_> {
         let originals = [offered.carrier(), delivered.carrier];
         let before = self.read_pending(&exact, originals, None);
 
+        eventually("later signed Offer advances wall time", || {
+            founder_fixture::wall() > delivered.created_at
+        })
+        .await;
         let later = founder.publish_offer(Instant::now() + STEP).await;
         assert!(later.selector().server == offered.selector().server);
         assert_ne!(later.selector().id, offered.selector().id);
