@@ -366,6 +366,12 @@ fn projected_abort_child() {
     assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut limit) }, 0);
     assert_eq!(limit.rlim_max, 0);
     crate::diagnostics::enable();
+    use super::super::Edge;
+    // A Ready marker would put SampleWritten before the first Status edge.
+    Edge::SampleWritten.record(Scenario::Ready);
+    for edge in Edge::ALL {
+        edge.record(Scenario::Status);
+    }
     let stderr = std::io::stderr();
     let mut err = stderr.lock();
     err.write_all(child_log::OWNED_FD_LINE).unwrap();
@@ -419,7 +425,7 @@ async fn runtime_line_needs_an_observed_sigabrt() {
         }
         let mut child = OwnedChild(Some(command.spawn().unwrap()));
         assert_eq!(
-            timeout_at(Instant::now() + STEP, child.failure_status(true))
+            timeout_at(Instant::now() + STEP * 3, child.failure_status(true))
                 .await
                 .unwrap(),
             end
@@ -427,6 +433,8 @@ async fn runtime_line_needs_an_observed_sigabrt() {
         assert!(child.0.is_none(), "exact private child reaped");
         let observation = observe_child_log(&log, end);
         assert!(observation.context);
+        assert_eq!(observation.edges, super::super::Edge::ALL);
+        assert!(!observation.out_of_order);
         assert_eq!(observation.abort, expected);
         assert!(!observation.unclassified_tail);
     }
