@@ -3,6 +3,14 @@
 #[path = "peer_postjoin_private_wss_tests.rs"]
 mod postjoin_private_wss;
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_daemon_registered_qualification_tests.rs"]
+mod registered_qualification;
+
 use super::{
     daemon_peer::{Admission, Bootstrap},
     *,
