@@ -91,10 +91,19 @@ async fn pending(
     Some(entry)
 }
 
+fn diagnostic_log(log: &File) -> Vec<u8> {
+    let size = usize::try_from(log.metadata().unwrap().len()).unwrap();
+    assert!(
+        size <= 512 * 1024,
+        "Manual recipient diagnostics exceeded log budget"
+    );
+    let mut bytes = vec![0; size];
+    log.read_exact_at(&mut bytes, 0).unwrap();
+    bytes
+}
+
 fn manual_failure_log(log: &File) -> String {
-    let mut bytes = vec![0; 64 * 1024];
-    let size = log.read_at(&mut bytes, 0).unwrap();
-    String::from_utf8_lossy(&bytes[..size])
+    String::from_utf8_lossy(&diagnostic_log(log))
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|value| {
@@ -109,14 +118,7 @@ fn manual_failure_log(log: &File) -> String {
 }
 
 fn approval_timings(log: &File) -> [u64; 2] {
-    let size = usize::try_from(log.metadata().unwrap().len()).unwrap();
-    assert!(
-        size <= 512 * 1024,
-        "approval diagnostics exceeded log budget"
-    );
-    let mut bytes = vec![0; size];
-    log.read_exact_at(&mut bytes, 0).unwrap();
-    let readings: Vec<_> = String::from_utf8_lossy(&bytes)
+    let readings: Vec<_> = String::from_utf8_lossy(&diagnostic_log(log))
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|value| value["event"] == "manual_approval_timing")
@@ -575,10 +577,10 @@ impl ManualSchemaStartup<'_> {
         assert!(!self.socket.exists());
         drop(ProfileLease::acquire_ready(self.root, PROFILE).unwrap());
 
-        let mut bytes = vec![0; 64 * 1024];
-        let size = log.read_at(&mut bytes, 0).unwrap();
+        // Matching-mode startups and unchanged bytes establish the schema
+        // boundary. This diagnostic confirms the point of local refusal.
         assert!(
-            String::from_utf8_lossy(&bytes[..size])
+            String::from_utf8_lossy(&diagnostic_log(&log))
                 .lines()
                 .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
                 .any(|line| line["stage"] == "registered_recipient"
@@ -596,7 +598,10 @@ async fn recipient_task(pid: u32) -> PathBuf {
     timeout(STEP, async {
         loop {
             for entry in std::fs::read_dir(&tasks).unwrap() {
-                let task = entry.unwrap().path();
+                let Ok(entry) = entry else {
+                    continue;
+                };
+                let task = entry.path();
                 // Linux task comm truncates the installed worker name to 15 bytes.
                 if std::fs::read(task.join("comm")).is_ok_and(|name| name == b"marmish-peer-re\n") {
                     return task;
