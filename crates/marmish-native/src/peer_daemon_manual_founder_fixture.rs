@@ -24,6 +24,9 @@ use crate::{
     },
 };
 
+const DELIVERY_LIFETIME: u64 = 600;
+const HELD_EXPIRY_MARGIN: u64 = 300;
+
 pub(super) struct FounderFixture<'a> {
     socket: Owner,
     signer: Arc<Keys>,
@@ -156,10 +159,10 @@ impl<'a> FounderFixture<'a> {
         .expect("native Welcome before deadline");
 
         let now = wall();
-        // Use a Delivery lifetime shorter than the 24-hour pending window.
-        // The codec checks that the signed expiry is within the Consent and
-        // KeyPackage lifetimes. Held subtracts 300 seconds from that expiry.
-        let expiry = now.checked_add(600).unwrap();
+        // The codec checks the Consent and KeyPackage lifetimes before signing.
+        // Compute the expected Pending expiry from that signed source and the
+        // protocol margin. The controller has about five minutes from Delivery.
+        let expiry = now.checked_add(DELIVERY_LIFETIME).unwrap();
         let delivery = self
             .codec
             .prepare_delivery(&self.signer, consent, &welcome, now, expiry)
@@ -174,7 +177,7 @@ impl<'a> FounderFixture<'a> {
         );
         Delivered {
             carrier: flight.carrier_id,
-            pending_expires_at: expiry - 300,
+            pending_expires_at: expiry - HELD_EXPIRY_MARGIN,
         }
     }
 }

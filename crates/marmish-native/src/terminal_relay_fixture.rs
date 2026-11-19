@@ -167,6 +167,43 @@ impl RecipientRuntimeRequests {
     }
 }
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[test]
+fn recipient_runtime_requests_reject_wrong_lane_or_bounds() {
+    const NAMESPACE: &str = "0123456789abcdef0123456789abcdef";
+    let mut requests = RecipientRuntimeRequests::default();
+    let mut record = |id, filter| {
+        requests.record(&Subscription {
+            id,
+            filters: vec![filter],
+        });
+    };
+    let live = json!({"limit": 0});
+    let page = json!({"limit": 4, "since": 10, "until": 20});
+    record(format!("mp/{NAMESPACE}/l"), live.clone());
+    record(format!("mp/{NAMESPACE}/p/1"), page.clone());
+    record(format!("mp/{NAMESPACE}/p/0"), page.clone());
+    record(format!("mp/{NAMESPACE}/g"), live.clone());
+    record("mp/invalid/l".to_owned(), live);
+    record(format!("mp/{NAMESPACE}/l"), page);
+    record(
+        format!("mp/{NAMESPACE}/p/2"),
+        json!({"limit": 4, "since": 20, "until": 10}),
+    );
+    assert_eq!(
+        requests,
+        RecipientRuntimeRequests {
+            live: 1,
+            history: 1,
+            unexpected: 5,
+        }
+    );
+}
+
 struct QuietAliases {
     accounts: [PublicKey; 2],
     seen: [usize; 2],
