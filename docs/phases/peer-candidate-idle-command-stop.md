@@ -25,15 +25,22 @@ Use one **six-second total prelude deadline**, measured from starting
 listener drain, across Begin, polls, time spent queued for the blocking pool
 and observing their results. Pass the same monotonic instant to the blocking
 turn and convert it with `tokio::time::Instant::from_std` for the async wait.
-The coordinator waits ten milliseconds between completed healthy Draining
-polls unless fatal or the deadline arrives earlier. It does not spin or catch
-up after a delayed wake. A first poll may run immediately after Begin.
-This is a prelude admission/acceptance
-budget, separate from the existing one-second physical observation slices.
+The first poll and the poll after measured progress may run immediately.
+Count an actual new row registration, completion commit, internal ACK, cursor
+advance or consuming enqueue as progress. After a Draining poll without one
+of those changes, wait ten milliseconds or until fatal or expiry. Never spin
+on an unchanged state or replay delayed timer ticks. This admission and
+acceptance budget is separate from the one-second physical observation slices.
 The existing 15 s incomplete diagnostic still measures from shutdown entry,
 including the prelude. The engine's five-second native acquisition budget,
 SQLCipher busy waits or scheduling can outlast the remaining prelude.
 Nothing depends on interrupting those calls or on a hard exit by six seconds.
+
+The first implementation gate is a compile-time assertion that
+`Box<MdkOwner>: Send + 'static` in the private candidate configuration. At
+this revision only the engine uses that blocking handoff. If the whole-owner
+assertion fails, stop and revisit the design without adding an unsafe Send
+wrapper or touching source outside this phase.
 
 Own exactly one blocking turn at a time. Move the existing guarded boxed
 owner, without replacing the Journal or engine with temporary state, into a
@@ -41,8 +48,13 @@ owner, without replacing the Journal or engine with temporary state, into a
 under `ManuallyDrop` in the turn and preserve the original lease in the stop
 coordinator. A queued closure checks the deadline and exact registration
 before the call. Retain the original join across timeout, fatal notification,
-and retries of observation. Dropping an observer may not drop the join or
-native owner. The listener is independently driven during the prelude.
+and retries of observation. Model the prelude as `InOwner`, `InTurn` with
+the retained join, and `Disposition` with restored owner and `Proved`,
+`Failed` or `Expired`. A lost ownership proof is a separate parked possible-
+live state, with no returned owner or disposition. Observation/reporting,
+complete and destruction must handle each state explicitly. Dropping an
+observer may not drop the join or native owner. The listener is independently
+driven during the prelude.
 
 Use fatal-biased async observation and re-read the sticky latch after
 receiving the join, even when a result and fatal arrive together. Check time
@@ -50,14 +62,17 @@ and admission immediately before and after each synchronous call. Expiry or
 fatal closes admission for further prelude turns. An already-running turn
 can finish or remain pending. A cut during an admitted synchronous call is
 indeterminate, so no later trusted effect can rely on that result. Exact
-Journal and worker storage fences remain in force. During an in-flight
-turn the owner cannot simultaneously enter `HealthyStop` or be borrowed for
-SDK extraction. The listener and raw transport's existing fatal signal
-remain independent. Begin other owner-bound physical barriers as soon as
-that same join restores ownership. On panic or unreturned ownership keep
-possible-live disposition and the original lease, with existing bounded
-observation and diagnostics. Never create a replacement owner, engine, stop
-turn, or cleanup proof to get past a missing join.
+Journal and worker storage fences remain in force. While the turn holds the
+owner, no stop observer may access it, release it, claim graceful completion,
+start SDK/forwarder shutdown, cancel runners or actively reap raw sockets.
+The listener and raw transport's existing fatal signal remain independent.
+Fatal during a turn leaves the still-owner-held engine possibly live. Once
+the same join restores the owner, extract with `take_engine_for_stop` and
+use the existing `can_join_dispatcher_cut` then `into_fatal_join` checks
+before running the remaining physical barriers. On panic or unreturned
+ownership keep possible-live disposition and the original lease, with
+existing bounded observations and diagnostics. Never create a replacement
+owner, engine, stop turn, or cleanup proof to get past a missing join.
 
 ## Exact worker and durable handoff
 
@@ -76,10 +91,16 @@ turn, or cleanup proof to get past a missing join.
   prelude. Busy or refusal enters physical stop without admitting a new
   reclamation. That disposition adds no promise about whether a previously
   admitted worker control already ran or finishes before worker stop.
+- Idle means no work that needs this engine to keep running, using these
+  checked conditions. Unanswered request slots and unsent publications may
+  still exist. They remain durable for ordinary recovery after a clean exit.
+  This is neither an exit-ready/release check nor a relay publication drain.
 - Invoke only `command_poll_cleanup` with that same retained owner until a
   poll returns same-fence `Quiesced`, time expires, or it refuses. The fence
   is kept by the coordinator; `Draining` is pending, `Open`, `Failed`, missing
-  or mismatched fence and any error fail the prelude. A positive result
+  or mismatched fence and any error fail the prelude. If the engine leaves
+  Ready or disconnects, fail immediately instead of repeatedly accepting
+  `Draining` from a poll that cannot progress. A positive result
   requires exact checked admission and time on both the blocking turn and
   observation side. Carry the success as an explicit private stop
   disposition, independent of later physical `worker_joined` and
@@ -91,6 +112,11 @@ turn, or cleanup proof to get past a missing join.
   exact internal engine `CommitAck` after commit. A fresh fence requires
   refreshing every retained server record, so work scales with retained
   history and can exhaust this budget even for an otherwise idle engine.
+  One row per waiting interval would allow fewer than 600 refreshes in six
+  seconds before database and scheduling costs. The Journal accepts up to
+  10,000 records globally. Reopening or repeating stop does not help a
+  large backlog because each stop allocates a fresh fence. Record this
+  limit on the private proof; large-profile graceful stop is not qualified.
   Reuse the established per-row transaction and authority checks. Do not
   add a synthetic observation, batch SQL update or queue-loss recovery to
   reduce that cost. A stalled bounded request or ACK queue falls back to the
@@ -113,13 +139,17 @@ turn, or cleanup proof to get past a missing join.
   `Cleanup(Quiesced)` event is the existing consuming engine proof. Candidate
   worker operations continue to use their exact dispatcher admission. Stop
   does not quiesce the engine. An already admitted/queued read-only
-  FinalObserve or consuming engine cleanup can finish as stop begins. No
-  late outcome can restore permission for trusted cleanup. Report failure
-  unless a checked, same-fence poll had already delivered the proof.
+  FinalObserve or consuming engine cleanup can finish as stop begins. In
+  particular, expiry after `consuming=true` can leave the engine store
+  closed and held by its guard until worker join. That is no permission to
+  clean up Journal/account/runtime. After physical barriers it still means
+  nonzero exit and lease retained through exit. No late outcome can restore
+  permission for trusted cleanup.
 
 After the first failed/expired decision, do not actively call `fail_cleanup`
 merely to clear state, change a durable invocation state, or manufacture an
-ACK. Existing poll errors retain their existing failure behavior. Stop may
+ACK. Existing in-poll failures may already have called `fail_cleanup` via
+`poll_completions` or `advance_cleanup`. The coordinator does not repeat it. Stop may
 collect worker events to unblock its bounded channel but must not commit or
 acknowledge further completions. A dropped requestless FinalObserve event
 leaves its registration in the Journal until existing cold
@@ -133,9 +163,10 @@ result is never treated as a negative proof that the previous write did not
 happen.
 
 Continue through the same physical stop and existing three guarded trusted
-cleanup effects. Only a matching on-time `Quiesced` proof, explicit actual
+cleanup effects. For a started engine add `prelude_proved` to
+`HealthyStop`'s `graceful_complete` predicate alongside explicit actual
 worker join with `complete && quiesced`, all other ownership barriers and
-clean listener drain allow successful cleanup for a started engine. An idle
+clean listener drain. An idle
 prelude timeout may ultimately leave a physically complete worker but must
 skip those effects and retain evidence and lease through nonzero process
 exit. Existing startup failure, NeverStarted and uncertain-custody rules
@@ -147,7 +178,8 @@ prelude failure; use physical teardown. Sticky fatal always dominates.
 - Use the private source-matched registered executable with an idle real
   started Command engine, then with at least two actually retained terminal
   results. Observe the fence, each durable requestless refresh and internal
-  ACK, actual engine join, socket/listener/SDK closure, cleanup and exit zero.
+  ACK, production Terminal authority retirement, actual engine join,
+  socket/listener/SDK closure, cleanup and exit zero.
   Reopen stock on the same disposable profile and verify retained results
   and no second launch. Retain no command output, SQL or key data in reports.
 - Prove active, uncertain and pending Copy GC refusal before allocating a
@@ -155,9 +187,12 @@ prelude failure; use physical teardown. Sticky fatal always dominates.
   unapplied work. Use an owned
   test gate to hold a bounded retained-row backlog or completion past the
   deadline. Cover registration committed before completion, completion
-  committed before runtime ACK, late `Quiesced`, and mismatched/missing fence.
+  committed before runtime ACK, expiry after the consuming enqueue, and
+  late `Quiesced`. Test a mismatched or missing fence via a unit seam at
+  result acceptance; the real service's sole preparation owns its fence.
   Assert no further prelude write or ACK, actual physical end as available,
   nonzero exit and no cleanup. Compare durable rows in a fresh stock process,
+  including successful reopened engine storage after a late consuming turn,
   with unchanged invocation result/output/replay classification and no
   lost or duplicated launch. An independent finite worker never inherits
   the profile flock.
