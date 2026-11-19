@@ -14,9 +14,12 @@ disposable founder and recipient, qualified direct Peer WSS and independent
 ordinary Command relay. After the existing native Welcome and exact Pending
 List/Show, keep the approval operation unused and cleanly stop the first child.
 Only when the lease is released, acquire the Ready lease, open the exact
-encrypted cursor read-only with the existing near-cap fixture's selection
-queries, and record the sole Pending custodian and closed stage identity/hash.
-Do not grow or write the files. Give the clock one later whole second if
+encrypted cursor read-only. Factor the existing test-only exact stage query
+behind two explicit wrappers, one retaining its existing V2 inventory check
+and one requiring ApprovalV3 for this test. The read transaction verifies the
+sole Pending custodian, exact original Offer marker and closed stage witness.
+Reopen the stage by that witness to obtain its identity and digest. Do not grow
+or write the files. Give the clock one later whole second if
 needed, then use the real same founder socket and `publish_offer` again.
 Assert different selector and exact author, later signed timestamp and
 correlated positive ACK before starting the second child. The later Offer will
