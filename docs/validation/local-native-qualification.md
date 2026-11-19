@@ -143,3 +143,32 @@ tamper refusal, typed closed-relay daemon refusal, and cleanup of daemon
 runtime and test-owned state. This run used local assets and skipped live
 activation and Terminal fixtures. The separate private WSS evidence above
 comes from the debug build and earlier source revision.
+
+## Installed interactive controls from a clean Linux AMD64 build
+
+Source `7f7d7bc1d71523f0950d7f7ed3647738616b3422` passed the full
+`--build-installed-terminal` mode on a local Linux AMD64 host with
+glibc 2.39, Rust 1.97.1, and tmux 3.4. The qualification took 843.518 seconds
+in a fresh Cargo target after license collection. Optimized release builds
+of the CLI, daemon and worker passed the glibc 2.39 package ABI gate. The
+run verified installed bytes and quickstart, reused the
+identity on repeat setup, refused both same-size tampered payloads, and
+checked stock foreground startup refusal against the held loopback socket.
+The separately compiled unoptimized libtest controller exercised one case
+using digest-identical shadows of the installed payloads. The case took
+42.501 seconds over fixture-trusted private loopback WSS. It exercised ordinary
+Command, literal Unicode, resize, Ctrl-C, detach/resume, and restoration.
+The fixture owner joined and cleanup checks passed. Observe, Takeover, Peer,
+stock-to-stock private WSS, cross-host and ARM64 product checks were unrun.
+[Structured result](interactive-installed-terminal-amd64.json).
+
+The separate trusted self-hosted inventory on the older master source
+`3cef7a798d1da9e435aa4c1fcf68f5138c509d67` passed all three jobs on
+2026-11-19. The Linux ARM64 job began 10 minutes 20 seconds after Linux
+AMD64 completed, and macOS ARM64 ran next. Linux ARM64 reported Python 3.12.3
+and glibc 2.39. Linux AMD64 reported glibc 2.43 on the host and passed the
+rootless glibc 2.39 container smoke. The macOS runner resolved `python3` to
+3.9.6, below the qualification harness requirement of 3.11. The jobs
+ran the preflight capability probe from that master checkout. The feature
+commit’s build, test and installer checks remain unrun on the runner pool.
+[GitHub Actions run 44592119081](https://github.com/Epiphytic/marmish/actions/runs/44592119081).

@@ -1,0 +1,57 @@
+{
+  "broader_terminal_qualification": "unrun",
+  "cargo_lock_sha256": "3a912641543f22f74c44c7988b7803c7c0fd160f591cfb2ee8cdcd7753826882",
+  "closed_relay_refusal": true,
+  "controls_elapsed_ms": 42501,
+  "cross_host": "unrun",
+  "daemon_runtime_removed": true,
+  "elapsed_ms": 843518,
+  "fixture_count": 1,
+  "fixture_passes": [
+    "mdk_adapter::terminal_route_proof_tests::terminal_command_fixture::terminal_installed_runtime_tests::foreground::terminal_installed_runtime_native_controls"
+  ],
+  "fixture_payload": "digest_identical_shadow",
+  "fixture_root_removed": true,
+  "fixture_tmux_cleanup": "checked",
+  "installed_payload_sha256": {
+    "marmish": "eedd08adb3728ed3982fd407b02f7cf81a4f4c8d25bdeac2294230d2ec5273c4",
+    "marmish-worker": "9c20c6354b77eafa8d75445d6be6b2e0d757745b77f5aa6efa2ce0957493344d",
+    "marmishd": "a016443c966bfb0ab24adea6e7290c1a7ea0bdc7e3cfba2961c57ed8bfcf0e29"
+  },
+  "installed_provenance": true,
+  "installed_quickstart": true,
+  "kind": "local_native_qualification",
+  "licenses_sha256": "fdbe4fb5e1fa0c7ebe442c379e6d0f16d4714b755002d32290dc0ad8008330a7",
+  "live_relay": "not_exercised",
+  "manifest_sha256": "378bd7a98e1a5d2d7b3172c611e957ee5a53dbb400691a97e800261bae6c97bc",
+  "observe": "unrun",
+  "ok": true,
+  "owned_fixture_join": "checked",
+  "owned_state_removed": true,
+  "package_asset_sha256": {
+    "THIRD-PARTY-LICENSES": "fdbe4fb5e1fa0c7ebe442c379e6d0f16d4714b755002d32290dc0ad8008330a7",
+    "marmish": "eedd08adb3728ed3982fd407b02f7cf81a4f4c8d25bdeac2294230d2ec5273c4",
+    "marmish-worker": "9c20c6354b77eafa8d75445d6be6b2e0d757745b77f5aa6efa2ce0957493344d",
+    "marmishd": "a016443c966bfb0ab24adea6e7290c1a7ea0bdc7e3cfba2961c57ed8bfcf0e29"
+  },
+  "package_inputs_sha256": {
+    "marmish": "eedd08adb3728ed3982fd407b02f7cf81a4f4c8d25bdeac2294230d2ec5273c4",
+    "marmish-worker": "9c20c6354b77eafa8d75445d6be6b2e0d757745b77f5aa6efa2ce0957493344d",
+    "marmishd": "a016443c966bfb0ab24adea6e7290c1a7ea0bdc7e3cfba2961c57ed8bfcf0e29"
+  },
+  "peer": "unrun",
+  "quickstart_diagnostics": {},
+  "repeat_setup": true,
+  "rust": "1.97.1",
+  "schema": 1,
+  "source_commit": "7f7d7bc1d71523f0950d7f7ed3647738616b3422",
+  "stage": "complete",
+  "stock_private_wss": "unrun",
+  "takeover": "unrun",
+  "tampered_payload_refused": true,
+  "tampered_replacement_refused": true,
+  "target": "x86_64-unknown-linux-gnu",
+  "terminal_scope": "installed_controls_subset",
+  "tmux": "3.4",
+  "version": "0.3.1"
+}

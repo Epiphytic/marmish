@@ -52,3 +52,15 @@ the same private IPC root. The Terminal patch's added and removed lines
 matched the approved author source. The reviewer ran the baseline and
 qualifier Python tests. The installed AMD64 result remains from the author
 source documented above.
+
+## Clean Linux AMD64 run and runner inventory evidence
+
+Claude Code Sonnet in Auto mode reviewed the [validation update](../validation/local-native-qualification.md#installed-interactive-controls-from-a-clean-linux-amd64-build)
+and sanitized JSON for exact tested source `7f7d7bc1d71523f0950d7f7ed3647738616b3422`.
+Session `ae487ecb-b7fd-4b3a-9126-614c857576a4` requested explicit separation
+of the optimized installed payloads from the test-profile controller and the
+older trusted-master inventory from the local product check. The revision
+also tied glibc 2.39 to the observed host and the package ABI gate. Session
+`8d9c296b-eb72-4bb8-85b3-e0c2ea35e816` approved. The reviewer checked JSON
+against the harness result, read the qualification and ABI code, and checked
+the inventory job logs in the first review. The author ran the harness.
