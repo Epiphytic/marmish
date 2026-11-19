@@ -173,12 +173,12 @@ impl RegisteredStartup {
             selected
                 .lease
                 .check_opened_binding(owner.opened_binding())?;
-            let worker = crate::native_layout::resolve(executable)?.worker;
+            let layout = crate::native_layout::resolve(executable)?;
             owner.enable_candidate_commands(
                 &selected.lease,
                 &self.material,
                 self.commands,
-                worker,
+                layout,
                 admission.clone(),
             )?;
             if !admission.admit() {

@@ -265,7 +265,10 @@ async fn command_startup_client_entrypoints_keep_the_no_engine_path() {
                     &fixture.profile,
                     &fixture.material,
                     fixture.config.clone(),
-                    PathBuf::new(),
+                    crate::native_layout::ExecutableLayout {
+                        helper: PathBuf::new(),
+                        worker: PathBuf::new(),
+                    },
                     Admission::new(&trip, move || {
                         check_count.fetch_add(1, Ordering::Relaxed);
                         true

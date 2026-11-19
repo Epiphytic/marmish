@@ -150,16 +150,16 @@ impl MdkOwner {
         profile: &ProfileLease,
         material: &IdentityMaterial,
         config: CommandConfig,
-        worker: PathBuf,
+        layout: crate::native_layout::ExecutableLayout,
         admission: Admission,
     ) -> Result<()> {
         self.enable_commands_inner(
             profile,
             material,
             config,
-            worker,
+            layout.worker,
             CommandStartup::Candidate(admission),
-            resolve_command_helper,
+            || Ok(layout.helper),
         )
     }
 
