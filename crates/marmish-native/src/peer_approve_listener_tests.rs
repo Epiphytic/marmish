@@ -60,7 +60,7 @@ impl Fixture {
         let (mut offer, _) =
             Offer::new(expected, registration, NonZeroU64::MIN, fatal.clone()).unwrap();
         let worker = if attach {
-            offer.pair_approval_for_test(lease.clone())
+            offer.pair_approval(lease.clone())
         } else {
             pair(
                 path.clone(),

@@ -4,7 +4,7 @@ use super::{receiver_inventory::RecoveredOwner, socket::owner::recipient::PeerRe
 use crate::{
     dispatcher_fatal::Fatal,
     identity::{IdentityMaterial, ProfileLease},
-    ipc::peer_read::pending_view::Producer,
+    ipc::{peer_approve_listener, peer_read::pending_view::Producer},
     peer_candidate_startup::{Ready, WorkerStart},
     peer_quota_vfs::dispatch::ReceiverQuota,
     peer_relay_trust::{
@@ -76,7 +76,7 @@ pub(crate) struct Actor {
 
 pub(crate) enum Service {
     Passive,
-    Manual(Producer),
+    Manual(Producer, Option<peer_approve_listener::Worker>),
     #[cfg(test)]
     InertManual(Producer),
 }
@@ -100,7 +100,7 @@ impl Actor {
         let stop = CancellationToken::new();
         let worker_stop = stop.clone();
         let manual_stop =
-            matches!(service, Service::Manual(_)).then(|| Arc::new(AtomicBool::new(false)));
+            matches!(service, Service::Manual(..)).then(|| Arc::new(AtomicBool::new(false)));
         let worker_manual_stop = manual_stop.clone();
         let thread = thread::Builder::new()
             .name("marmish-peer-recipient".into())
@@ -266,8 +266,9 @@ async fn attach(
     tests::panic_at("panic_before_attach");
     let mut attached = fence.step(|| registration.attach(lease, material))?;
     let (quota, mut route) = attached.actor_parts();
+    let approval = matches!(&service, Service::Manual(_, Some(_)));
     let mut owner = fence.step(|| {
-        RecoveredOwner::open_for_actor(lease, material, quota, &mut route, || {
+        RecoveredOwner::open_for_actor(lease, material, quota, &mut route, approval, || {
             fence.deadline().is_ok()
         })
     })?;
@@ -301,7 +302,7 @@ async fn attach(
 async fn hold_port<'profile>(
     admission: ReceiverRouteAdmission,
     owner: &mut RecoveredOwner<'profile>,
-    lease: &'profile ProfileLease,
+    lease: &'profile Arc<ProfileLease>,
     quota: &ReceiverQuota<'profile>,
     fence: &mut StartupFence<'_>,
     service: Service,
@@ -334,8 +335,8 @@ async fn hold_port<'profile>(
         tests::panic_at("panic_in_hold");
     }
     match service {
-        Service::Manual(producer) => {
-            manual::serve(owner, lease, quota, &mut port, fence, producer).await
+        Service::Manual(producer, approval) => {
+            manual::serve(owner, lease, quota, &mut port, fence, producer, approval).await
         }
         Service::Passive => hold_idle(port, fence).await,
         #[cfg(test)]
@@ -554,12 +555,18 @@ mod tests {
             let ready = worker.ready().await.unwrap();
             if case == "replaced_while_preparing" {
                 let original = lease.root().join("cursor-original-test");
-                let result =
-                    RecoveredOwner::open_for_actor(&lease, &material, quota, &mut route, || {
+                let result = RecoveredOwner::open_for_actor(
+                    &lease,
+                    &material,
+                    quota,
+                    &mut route,
+                    false,
+                    || {
                         fs::rename(&cursor, &original).unwrap();
                         create_private(&cursor);
                         true
-                    });
+                    },
+                );
                 assert!(result.is_err());
                 assert_eq!(fs::metadata(&cursor).unwrap().len(), 0);
                 assert_eq!(fs::metadata(original).unwrap().len(), 0);

@@ -41,6 +41,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Inputs> {
     let intent = match args.peek().and_then(|arg| arg.to_str()) {
         Some("--passive-recipient") => QualificationIntent::PassiveRecipient,
         Some("--manual-recipient") => QualificationIntent::ManualRecipient,
+        Some("--manual-approval-recipient") => QualificationIntent::ManualApprovalRecipient,
         _ => QualificationIntent::CommandOnly,
     };
     if intent != QualificationIntent::CommandOnly {

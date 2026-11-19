@@ -63,7 +63,6 @@ struct Exchange {
     claim_cutoff: watch::Sender<Option<Instant>>,
 }
 
-#[cfg(test)]
 pub(super) fn pair(
     path: PathBuf,
     lease: Arc<ProfileLease>,

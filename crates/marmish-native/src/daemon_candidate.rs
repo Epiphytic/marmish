@@ -58,6 +58,7 @@ pub(crate) enum QualificationIntent {
     CommandOnly,
     PassiveRecipient,
     ManualRecipient,
+    ManualApprovalRecipient,
 }
 
 impl QualificationIntent {
@@ -245,8 +246,8 @@ impl Recipient {
                 ),
                 Service::Passive,
             ),
-            QualificationIntent::ManualRecipient => {
-                let Some((offer, producer)) = ipc::peer_read_listener::Offer::new(
+            QualificationIntent::ManualRecipient | QualificationIntent::ManualApprovalRecipient => {
+                let Some((mut offer, producer)) = ipc::peer_read_listener::Offer::new(
                     lease.socket_path(),
                     registration,
                     NonZeroU64::MIN,
@@ -254,9 +255,11 @@ impl Recipient {
                 ) else {
                     return Ok(ipc::CandidateListener::registered(registered_fatal, None));
                 };
+                let approval = (intent == QualificationIntent::ManualApprovalRecipient)
+                    .then(|| offer.pair_approval(lease.clone()));
                 (
                     ipc::CandidateListener::registered(registered_fatal, Some(offer)),
-                    Service::Manual(producer),
+                    Service::Manual(producer, approval),
                 )
             }
             QualificationIntent::CommandOnly => {

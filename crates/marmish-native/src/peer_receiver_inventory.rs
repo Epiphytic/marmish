@@ -34,6 +34,16 @@ pub(super) struct RecoveredOwner<'lease> {
     package_quota: Option<&'lease ReceiverQuota<'lease>>,
 }
 
+enum CursorEpoch {
+    V2,
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    ApprovalV3,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Class {
     Vacant,
@@ -115,6 +125,7 @@ impl<'lease> RecoveredOwner<'lease> {
             '_,
             'profile,
         >,
+        approval: bool,
         current: impl FnOnce() -> bool,
     ) -> Result<Self> {
         let relay = route
@@ -130,7 +141,12 @@ impl<'lease> RecoveredOwner<'lease> {
         let paths = Paths::new(lease, material)?;
         let cursor = paths.cursor()?;
         cursor.matches_file(&prepared)?;
-        let owner = Self::open_pinned(paths, cursor, material, &relay, Some(quota))?;
+        let epoch = if approval {
+            CursorEpoch::ApprovalV3
+        } else {
+            CursorEpoch::V2
+        };
+        let owner = Self::open_pinned(paths, cursor, material, &relay, Some(quota), epoch)?;
         owner.cursor.matches_file(&prepared)?;
         Ok(owner)
     }
@@ -148,7 +164,14 @@ impl<'lease> RecoveredOwner<'lease> {
     ) -> Result<Self> {
         let paths = Paths::new(lease, material)?;
         let cursor = paths.cursor()?;
-        Self::open_pinned(paths, cursor, material, relay, package_quota)
+        Self::open_pinned(
+            paths,
+            cursor,
+            material,
+            relay,
+            package_quota,
+            CursorEpoch::V2,
+        )
     }
 
     fn open_pinned(
@@ -157,6 +180,7 @@ impl<'lease> RecoveredOwner<'lease> {
         material: &IdentityMaterial,
         relay: &str,
         package_quota: Option<&'lease ReceiverQuota<'lease>>,
+        epoch: CursorEpoch,
     ) -> Result<Self> {
         if !local_volume(cursor.path()).map_err(|_| Error::Path)? {
             return Err(Error::Path);
@@ -184,7 +208,16 @@ impl<'lease> RecoveredOwner<'lease> {
                 Policy::default(),
             )?;
         }
-        let checkpoint = Checkpoint::attach_installed_custody(
+        let attach = match epoch {
+            CursorEpoch::V2 => Checkpoint::attach_installed_custody,
+            #[cfg(all(
+                marmish_peer_receiver_candidate,
+                target_os = "linux",
+                target_arch = "x86_64"
+            ))]
+            CursorEpoch::ApprovalV3 => Checkpoint::attach_installed_manual_approval,
+        };
+        let checkpoint = attach(
             open()?,
             (*signer).clone(),
             uid,

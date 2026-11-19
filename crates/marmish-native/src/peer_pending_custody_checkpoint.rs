@@ -831,6 +831,33 @@ impl Checkpoint {
         )
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(in crate::peer_invitation) fn attach_installed_manual_approval(
+        conn: HardenedPeerConnection,
+        signer: Keys,
+        uid: u32,
+        url: &str,
+        policy: Policy,
+        receive: ReceivePolicy,
+    ) -> Result<Self> {
+        if !matches!(receive, ReceivePolicy::Manual) {
+            return Err(Error::Policy);
+        }
+        Self::attach_installed_epoch(
+            conn,
+            signer,
+            uid,
+            url,
+            policy,
+            receive,
+            custody_schema::InstalledKind::ApprovalV3,
+        )
+    }
+
     fn attach_installed_epoch(
         conn: HardenedPeerConnection,
         signer: Keys,

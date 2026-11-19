@@ -73,8 +73,7 @@ impl Offer {
             .map(super::peer_approve_listener::Listener::intake)
     }
 
-    #[cfg(test)]
-    pub(super) fn pair_approval_for_test(
+    pub(crate) fn pair_approval(
         &mut self,
         lease: std::sync::Arc<crate::identity::ProfileLease>,
     ) -> super::peer_approve_listener::Worker {
