@@ -30,35 +30,69 @@ Await stream and relay operations only while their exact Admission permits
 continued effects. Put each resumed operation and its final completion behind
 the checked effect boundary. Do not run the full active tick during stop.
 
-Drive the existing synchronous Command engine stop in short, bounded turns
-on a blocking observer. A blocking turn returns the same engine even when
-its typed result is Fatal or failed; do not detach it or run an automatic
-retry loop. If it has to outlive the active observer, retain the blocking join
-and the engine custody within the stop state. On return, put the engine back
-into owning position before another admission. A successfully joined engine
-can be represented by its existing already-joined handle until final owner
-release. A panic without trustworthy thread or child ownership is uncertain.
-The stop must never discard that uncertainty or reinterpret the returned
-error as proof of physical completion.
+Track engine custody explicitly as NeverStarted, InOwner, InTurn with a
+join, Joined, or Uncertain. InOwner and InTurn both own or account for the
+same engine. A temporarily empty CommandService slot is not Join evidence.
+Drive the existing stop_outcome in bounded blocking turns. Continue promptly
+after an ordinary incomplete result, so event collection releases a worker
+blocked on its bounded queue. Discard all drained requests/completions
+without publication or acknowledgment. On Fatal or Err, stop driving the
+ordinary turn. The blocking observer returns the engine with its typed result.
+Cancellation of an observer retains its join. If the join panics before
+returning the engine, classify the handle as possibly active and retain the
+profile. After the normal observation budget, a stuck worker keeps the
+process in an incomplete HealthyStopping state with periodic diagnostics.
+A later cut interrupts stop_outcome through its existing sticky check and
+transfers the in-flight turn before converting the returned engine into
+into_fatal_join, or retaining it explicitly if conversion refuses.
 
 Separate graceful account deactivation from transport termination. Admit
-the actual MDK deactivation and each resumed durable effect independently.
-Acquire explicit SDK shutdown and nested forwarder proof and connector
-quiescence through the same owning fields used by the physical cut.
-Avoid the stock convenience shutdown when it consumes or aborts a join needed
-by the candidate. Once a task is launched, its join belongs to custody until
-settled. Mark each settled result once and do not repeat physical shutdown
-after passing that checkpoint. Verify exact Admission once more before
-closing Journal, before native account close, and before trusted runtime
-cleanup. Close and remove only after each prerequisite completes. If a
-trusted close itself reports indeterminate, preserve the remaining roots.
+actual deactivation and each resumed durable effect independently. Race
+bounded async progress with the Fatal wake, and re-read the sticky flag
+after every await, including when mark_cut precedes the wake. Keep all
+started resource handles outside cancelable futures and in custody.
+Cancellation without such ownership is uncertain. Obtain SDK shutdown and
+nested forwarder proof and connector quiescence through the fields used by
+the physical cut. Do not use the stock shutdown that consumes or aborts
+those joins. Preserve the exact runner, SDK, forwarder and raw observations
+on the fatal transfer. A held join is always transferred and never launched
+again. Check exact Admission and Fatal before Journal close, native account
+close, and the final trusted runtime cleanup. Re-read the latch after each
+effect; a mid-effect cut retains indeterminate disposition even if that
+already-admitted synchronous effect ran. There is a check-to-unlink window
+in cleanup_runtime because it uses plain filesystem calls. It is the last
+effect and its outcome can only be published after the post-effect check.
+
+## Disposition rules
+
+| Obligation | Complete evidence | Incomplete behavior |
+| --- | --- | --- |
+| IPC listener | Owned join returned normally and socket intake revoked | Listener panic or drain error is failure. This task owns no child in the registered Command path. Preserve unresolved socket evidence. |
+| Command engine | Absent with NeverStarted proof, or actual engine join with retained outcome | Pending blocking turn or lost engine/worker ownership is possibly active. A normal worker thread join returning engine_thread_failed is a failed stop, and is exit-eligible only with independent child evidence. |
+| Stream runner | Finished marker plus snapshot without uncertainty | A pending marker, try_exit failure, or caught panic with uncertain snapshot can mean a live child. Preserve the process and flock until actual reap evidence. |
+| SDK and nested forwarder | Actual successful shutdown and nested forwarder join | JoinError or lost handle is incomplete. A pending or lost task is retained as possibly active until there is independent end evidence. Outer abort alone proves neither. |
+| Raw transport | All selected raw ownership slots confirmed released | Retain unresolved socket evidence. Incomplete raw state produces failure even after all child and task obligations have positive evidence. |
+| Journal, account, runtime | Each trusted operation guarded and completed without a post-cut observation | Preserve remaining database roots, runtime evidence, and lease until process exit. Report an error even if every owned execution obligation is physically complete. |
+
+Partition every settled result into complete, failed but no remaining
+child/task possible, or uncertain with possibly active ownership.
+Healthy stop can report success only with all required proofs. Even without
+a fatal trip, a failed but exit-eligible stop retains roots and the flock
+through nonzero process exit. An uncertain healthy stop holds the lease
+and continues bounded observation. A later actual dispatcher loss transitions
+the same remaining ownership to FatalPhysical. A Journal/MDK operation that
+reports an indeterminate close must use that leaf's trusted-retention and
+failure signaling path. Incomplete never authorizes destructors while
+default trust or physical ownership is uncertain.
 
 ## Fatal and process exit
 
 The existing physical cut begins with an owner that has never entered
 graceful stream stopping. Add an explicit consuming transfer from the
-registered healthy stop, using its proof of retained original engine, runner,
-SDK and forwarder ownership and any already observed barriers. Do not loosen
+registered healthy stop, including explicit engine custody and the same
+runner, SDK, forwarder, raw and listener observations. A missing engine
+requires NeverStarted or actual Joined proof. A pending blocking turn stays
+an observed engine barrier. Do not loosen
 the convenience physical cut to accept arbitrary stock stopping state. Both
 entries share effect-free physical cancellation and barrier observation.
 After fatal there is no new MDK deactivation, database operation, native
@@ -76,9 +110,9 @@ live child, keep the original process and flock alive and expose that
 outcome through diagnostics. External forced termination leaves it
 unresolved and must never be represented as a successful stop.
 
-When the native roots have been parked and every owned child is positively
-observed reaped or proved never started, terminate the qualification process
-nonzero with the disposition. Use ManuallyDrop or forget for untrusted
+When the native roots have been parked, every owned child is positively
+observed reaped or proved never started, and no possibly active task retains
+its authority, terminate the qualification process nonzero with the disposition. Use ManuallyDrop or forget for untrusted
 roots and any retained unresolved non-child handles. Do not return through
 main or Tokio runtime teardown on this path. An incomplete barrier never
 produces a success report, even if process exit is possible. The OS releases
@@ -95,6 +129,11 @@ paths, retained flock and exact native database/sidecar images after the last
 admitted call, original engine and child ownership, and actual listener and
 connector shutdown. Synchronize a held child after cancellation: verify the
 process stays up with the lease and an incomplete diagnostic, then releases
-only after the observed child release marker. An injected failed observer
-must not be mistaken for completion. Preserve the existing stock Linux and
-macOS stop regression coverage. Obtain exact Claude Code Auto review.
+only after observed child release. Inject a runner exit-observation failure
+or panic and ensure an uncertain runner cannot authorize exit. Interrupt an
+engine turn in flight and between turns, inject a panic that loses engine
+ownership, force a full event queue during healthy stop, and trip after the
+SDK task starts. A failed observer never supplies missing child or nested
+task evidence. Assert that no independently handed-off finite worker inherits
+the daemon flock descriptor. Preserve existing stock Linux and macOS stop
+regressions. Obtain exact Claude Code Auto review.
