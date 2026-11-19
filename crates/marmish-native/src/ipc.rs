@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{UnixListener, UnixStream},
     sync::{mpsc, oneshot, watch},
 };
@@ -293,7 +293,9 @@ fn verify_peer_uid(uid: u32) -> Result<()> {
     Ok(())
 }
 
-async fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut UnixStream) -> Result<T> {
+async fn read_frame<T: for<'de> Deserialize<'de>>(
+    stream: &mut (impl AsyncRead + Unpin),
+) -> Result<T> {
     let length = stream.read_u32().await? as usize;
     if length == 0 || length > FRAME_LIMIT {
         return Err(Error::Invalid("ipc_frame_size"));
@@ -303,7 +305,10 @@ async fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut UnixStream) -> Re
     serde_json::from_slice(&bytes).map_err(|_| Error::Invalid("ipc_frame_json"))
 }
 
-async fn write_frame_body(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
+async fn write_frame_body(
+    stream: &mut (impl AsyncWrite + Unpin),
+    value: &impl Serialize,
+) -> Result<()> {
     let bytes = serde_json::to_vec(value).map_err(|_| Error::Invalid("ipc_frame_json"))?;
     if bytes.is_empty() || bytes.len() > FRAME_LIMIT {
         return Err(Error::Invalid("ipc_frame_size"));
@@ -313,10 +318,107 @@ async fn write_frame_body(stream: &mut UnixStream, value: &impl Serialize) -> Re
     Ok(())
 }
 
-async fn write_frame(stream: &mut UnixStream, value: &impl Serialize) -> Result<()> {
+async fn write_frame(stream: &mut (impl AsyncWrite + Unpin), value: &impl Serialize) -> Result<()> {
     write_frame_body(stream, value).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+#[derive(Clone, Default)]
+struct SocketFence {
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    fatal: Option<crate::dispatcher_fatal::Fatal>,
+}
+
+impl SocketFence {
+    fn tripped(&self) -> bool {
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = &self.fatal {
+            return fatal.is_tripped();
+        }
+        false
+    }
+
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    async fn tripped_wait(&self) {
+        if let Some(fatal) = &self.fatal {
+            fatal.tripped().await;
+        } else {
+            std::future::pending().await
+        }
+    }
+
+    async fn read(&self, stream: &mut UnixStream) -> Result<Request> {
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = &self.fatal {
+            return read_frame(&mut crate::dispatcher_fatal::FencedStream::new(
+                stream, fatal,
+            ))
+            .await;
+        }
+        read_frame(stream).await
+    }
+
+    async fn write(&self, stream: &mut UnixStream, response: &Response) -> Result<()> {
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if let Some(fatal) = &self.fatal {
+            return write_frame(
+                &mut crate::dispatcher_fatal::FencedStream::new(stream, fatal),
+                response,
+            )
+            .await;
+        }
+        write_frame(stream, response).await
+    }
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[derive(Default)]
+pub(crate) struct CandidateListener {
+    fatal: Option<crate::dispatcher_fatal::Fatal>,
+    offer: Option<peer_read_listener::Offer>,
+}
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+impl CandidateListener {
+    #[allow(dead_code, reason = "candidate daemon mount is composed separately")]
+    pub(crate) fn registered(
+        fatal: crate::dispatcher_fatal::Fatal,
+        offer: Option<peer_read_listener::Offer>,
+    ) -> Self {
+        Self {
+            fatal: Some(fatal),
+            offer,
+        }
+    }
 }
 
 async fn exchange(path: &Path, request: &Request, timeout: Duration) -> Result<Response> {
@@ -502,7 +604,7 @@ pub(crate) async fn serve_inner(
             target_os = "linux",
             target_arch = "x86_64"
         ))]
-        None,
+        CandidateListener::default(),
     )
     .await
 }
@@ -529,7 +631,7 @@ pub(crate) async fn serve_with_peer(
             target_os = "linux",
             target_arch = "x86_64"
         ))]
-        None,
+        CandidateListener::default(),
     )
     .await
 }
@@ -567,7 +669,7 @@ pub(crate) async fn serve_with_listener(
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    read_offer: Option<peer_read_listener::Offer>,
+    registered: CandidateListener,
 ) -> Result<()> {
     #[cfg(test)]
     let peer = peer.map(|peer| peer.register(&listener)).transpose()?;
@@ -579,13 +681,24 @@ pub(crate) async fn serve_with_listener(
             return Err(Error::Invalid("candidate_fixture_listener_exit"));
         }
     }
+    let fence = SocketFence {
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        fatal: registered.fatal,
+    };
+    if fence.tripped() {
+        return Ok(());
+    }
     #[cfg(all(
         marmish_peer_receiver_candidate,
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    let read_offer = read_offer.and_then(|offer| offer.register(&listener));
-    let drain = async {
+    let read_offer = registered.offer.and_then(|offer| offer.register(&listener));
+    let receive_drain = async {
         #[cfg(any(
             test,
             all(
@@ -600,10 +713,30 @@ pub(crate) async fn serve_with_listener(
         }
         std::future::pending::<()>().await;
     };
+    let drain = async {
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        tokio::select! {
+            _ = receive_drain => {},
+            _ = fence.tripped_wait() => {},
+        }
+        #[cfg(not(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        )))]
+        receive_drain.await;
+    };
     tokio::pin!(drain);
     let clients = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
     let mut tasks = tokio::task::JoinSet::new();
     let outcome = loop {
+        if fence.tripped() {
+            break Ok(());
+        }
         tokio::select! {
             _ = &mut drain => break Ok(()),
             _ = tasks.join_next(), if !tasks.is_empty() => {}
@@ -622,7 +755,10 @@ pub(crate) async fn serve_with_listener(
                             break Err(Error::Invalid("peer_listener_accept"));
                         }
                         crate::diagnostics::event("ipc_accept", "retry_pending");
-                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        tokio::select! {
+                            _ = &mut drain => break Ok(()),
+                            _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                        }
                         continue;
                     }
                 };
@@ -632,6 +768,7 @@ pub(crate) async fn serve_with_listener(
                 let queue = queue.clone();
                 let status = status.clone();
                 let terminal = terminal.clone();
+                let fence = fence.clone();
                 #[cfg(test)]
                 let intake = peer.as_ref().map(|(_, intake)| intake.clone());
                 #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
@@ -639,10 +776,13 @@ pub(crate) async fn serve_with_listener(
                 tasks.spawn(async move {
                     let _permit = permit;
                     let exchange_deadline = accepted_at + IO_TIMEOUT;
-                    let result = tokio::time::timeout_at(exchange_deadline, read_frame::<Request>(&mut stream)).await;
+                    let result = tokio::time::timeout_at(exchange_deadline, fence.read(&mut stream)).await;
+                    if fence.tripped() {
+                        return;
+                    }
                     if let Ok(Ok(Request::TerminalStart { request })) = result {
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-                        terminal_handshake::transfer(terminal, request, stream, _permit, deadline).await;
+                        terminal_handshake::transfer(terminal, request, stream, _permit, deadline, &fence).await;
                         return;
                     }
                     #[cfg(test)]
@@ -656,14 +796,14 @@ pub(crate) async fn serve_with_listener(
                         if tokio::time::Instant::now() < exchange_deadline {
                             let _ = tokio::time::timeout_at(
                                 exchange_deadline,
-                                write_frame(&mut stream, &response),
+                                fence.write(&mut stream, &response),
                             ).await;
                         }
                         return;
                     }
                     #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
                     if let (Some(intake), Ok(Ok(Request::PeerRead { request }))) = (&read_intake, &result) {
-                        intake.write(*request, &mut stream, exchange_deadline).await;
+                        intake.write(*request, &mut stream, exchange_deadline, &fence).await;
                         return;
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
@@ -674,6 +814,9 @@ pub(crate) async fn serve_with_listener(
                         Ok(Ok(request)) => {
                             let deadline = if short_exchange {exchange_deadline - Duration::from_millis(100)} else {tokio::time::Instant::now() + Duration::from_secs(150)};
                             let (respond, receiver) = oneshot::channel();
+                            if fence.tripped() {
+                                return;
+                            }
                             if queue.try_send(Pending { request, respond, deadline }).is_err() {
                                 Response::failure("busy")
                             } else {
@@ -686,7 +829,7 @@ pub(crate) async fn serve_with_listener(
                         _ => Response::failure("invalid_request"),
                     };
                     let write_deadline = if short_exchange {exchange_deadline} else {tokio::time::Instant::now() + IO_TIMEOUT};
-                    let _ = tokio::time::timeout_at(write_deadline, write_frame(&mut stream, &response)).await;
+                    let _ = tokio::time::timeout_at(write_deadline, fence.write(&mut stream, &response)).await;
                 });
             }
         }
@@ -707,6 +850,15 @@ pub(crate) async fn serve_with_listener(
     tasks.shutdown().await;
     outcome
 }
+
+#[cfg(all(
+    test,
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "ipc_fatal_tests.rs"]
+mod fatal_listener_tests;
 
 #[cfg(test)]
 mod tests {

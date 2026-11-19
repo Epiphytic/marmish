@@ -57,7 +57,10 @@ impl Fixture {
             None,
             Some(draining),
             None,
-            Some(offer),
+            ipc::CandidateListener {
+                fatal: None,
+                offer: Some(offer),
+            },
         ));
         Self {
             _directory: directory,
