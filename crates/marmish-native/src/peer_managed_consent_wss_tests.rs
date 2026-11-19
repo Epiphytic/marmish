@@ -175,7 +175,12 @@ async fn managed_consent_ack_child() {
             },
             owner,
             queued,
-            || RecoveredOwner::open_registered(&lease, &material, quota, &mut route).unwrap(),
+            || {
+                // The live port consumed the one-shot route. Cold cursor readback
+                // reuses the already bound lease and registered quota only.
+                let _files = quota.receiver_files(&lease).unwrap();
+                RecoveredOwner::open_core(&lease, &material, url, Some(quota)).unwrap()
+            },
         )
         .await;
         return;
