@@ -31,3 +31,27 @@ Carry the following accepted qualifications into implementation and mounting.
   Keep quiescence assertions at each selected cut ordinal. In the composed
   caller explicitly prove no degradation marker, failed-room retry entry,
   or generic fallback reply from fatal dispatcher loss.
+
+## First owner source increment
+
+Claude Code Sonnet in Auto mode approved exact Rust at
+`776487bc946f6c5be3c5f4586f0971aeb800dd9b` in session
+`39647f9f-80e7-47fd-9869-2c338142cb9d`, subject to the author checks
+linked below. The review inspected the implemented boundaries and ran a
+scoped `rustfmt --check`. Claude independently reran the exact displacement
+selector in session `25389fd7-b22f-4f43-b12c-0c3377dbb40c` and recorded
+one passing test.
+
+Preliminary review `2ddfebab-ca76-4036-9eb9-315f08013e23` requested the
+correct Tokio clock type in the test and a new admission check before each
+orphan compensation effect. The final source corrects the test import, checks
+each selected orphan before rejection or removal, and checks again around
+native forget and journal cleanup. It also checks retained Welcome
+compensation before entering that path.
+
+The approval covers the inert owner source increment. The owner exit still
+needs mid-orphan cut coverage, the other per-site cut cases, byte-exact keyed
+restart projections and verification of SDK callback refusal. The mount must
+preserve the Command request allowlist and check fatal before reply
+classification, including timeout and generic fallback. [Validation and
+remaining checks](../validation/peer-candidate-command-active.md).
