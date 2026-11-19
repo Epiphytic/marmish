@@ -31,11 +31,12 @@ checkpoint, new issuer, parallel task, reconnect or second attempt.
 1. Read the exact managed queue through a narrow owner method using
    `Checkpoint::read_managed_queued`, the owner's original
    `Source`, and fresh `NativeRouteWindow` account, origin and wall.
-   Absence, a settled row or a retry not yet due yields unavailable,
-   without signing or any physical publication. Use an opaque
-   `ManagedQueued` challenge. Build one native window from a fresh
-   observation of the same exclusively held port. Clamp the signed
-   end to `queued.target().deadline()` and retain the existing
+   Read and, for eligible work, construct the window inside one
+   `use_current_native` closure. Absence, a settled row or a retry
+   not yet due yields unavailable before a native package read, via
+   a narrow advisory eligibility check on opaque `ManagedQueued`.
+   The reserve CAS still independently rechecks eligibility. Clamp
+   the signed end to `queued.target().deadline()` and retain the existing
    five-second native budget, readiness, stop, fatal, certificate,
    qualification and route checks. Run `reserve_managed_consent`
    to re-attest the charged package and reserve one exact attempt. An
@@ -64,7 +65,8 @@ checkpoint, new issuer, parallel task, reconnect or second attempt.
    its witness and re-read the exact durable attempt under the
    existing SQL fences. Renew no authority after that callback.
    A failed barrier retires the port and never polls the physical
-   Consent flush. Preserve the distinction between staged bytes and
+   Consent flush. Use the existing fixture's pattern of retaining a
+   bounded local refusal beside the socket's typed failure. Preserve the distinction between staged bytes and
    bytes that may have reached the relay.
 4. On an exact positive relay ACK, call `use_accepted` on that same
    port to obtain a fresh scoped `CheckedAck`. Consume the turn
@@ -115,8 +117,9 @@ with a no-op final fence. Make the managed port call consume the
 settled token after its independent checked ACK and original-window
 checks.
 
-Extend the internal cursor wake with a last-commit hook and preserve
-the old signature as a no-op wrapper. The existing indexed predicate
+Extend the internal cursor wake with a hook after the UPDATE and
+before `commit()`. Keep the existing `wake_with_fence` signature as
+a wrapper with a no-op final hook. The existing indexed predicate
 updates only existing FlightVerified retries of that exact origin and
 Consent carrier, with a retry time strictly in the future. It creates
 no work and updates no other prerequisite. An injected precommit
@@ -149,9 +152,12 @@ private permit fields and the existing raw writer. Keep the prior
 fixture and legacy ingress paths test-only. Extend
 `peer_managed_consent_wss_tests.rs` only as needed, adding a separate
 child test file if the new cases obscure the existing ACK proof.
+Use existing reasoned unmounted-code allowances where the candidate
+binary has no caller before the actor mounts.
 
-- Use the existing registered, disposable private TLS WSS fixture,
-  actual NIP-42 account authentication and checked live v2 Offer.
+- Use the existing registered, disposable direct-loopback private TLS
+  WSS fixture with Tor off, actual NIP-42 account authentication and
+  checked live v2 Offer.
   Obtain a real registered quota and managed package, persist the
   v2 queue and run the new non-fixture wrapper on that same port.
   Compare authenticated relay Consent flow and stored exact carrier,
@@ -161,18 +167,37 @@ child test file if the new cases obscure the existing ACK proof.
   relay observation separately.
 - Seed the matching deferred retry before opening the send window
   using `observe_installed_delivery` and `finish_installed_delivery`
-  on the same managed checkpoint. Follow the existing
-  `peer_installed_delivery_wss_tests::observe_delivery` and real
-  stage-attestation pattern. A fixture-only lender can read the exact
+  on the same managed checkpoint. Follow the existing checked live
+  carrier pattern in `peer_installed_delivery_wss_tests::observe_delivery`.
+  Add a Linux AMD64 `cfg(test)` bridge in `peer_prepared_consent_owner`
+  to construct its private `NativeAttestation`. Its sole caller is
+  fixture support in `peer_candidate_package_owner`: on the original
+  `RecoveredOwner`, use `attest_queued_package` for the same charged
+  quota, source, checkpoint and paths, then `recheck_managed_package`
+  immediately before converting the resulting `PackageProof`. Move
+  its exact binding, file witness, original image digest and native
+  `ProvisionalPackage.event` into the proof. Require the observed
+  Delivery's exact stage coordinates, a checked sample at or after
+  its observation, the setup window's exclusive signed end, and the
+  package's own exclusive expiry. Run the recheck, conversion and
+  fresh checked-carrier finish synchronously in the same owner turn,
+  with no intervening asynchronous gap or second owner. The existing
+  Delivery finish still independently matches carrier, signed package
+  and current wall. The bridge is for test deferral under registered
+  custody and carries no Welcome capability. Use a separate setup
+  window so this fixture setup does not spend the send budget.
+  A fixture-only lender can read the exact
   queued frame so an independent founder prepares authenticated v2
   Delivery while Consent is still unacknowledged. Check that the
   observed prerequisite is the actual managed carrier before using
   that row as evidence. Reuse the existing checked due-only retry to
-  obtain a future retry interval longer than the send window if
-  initial backoff is too short. Keep its Welcome opaque and perform
-  zero recipient Welcome effects. Use a separate checked prerequisite
-  for the unrelated retry, or a cursor-local fixture sentinel scoped
-  to a distinct prerequisite and explicitly report that oracle. A positive ACK wakes only the
+  obtain a future retry interval longer than the send window. Allow
+  about seven seconds of actual waits to reach the eight-second backoff.
+  Seed the final interval immediately before the send and require
+  enough readback margin to make the wake observable. Keep its Welcome
+  opaque and perform zero recipient Welcome effects. Use one
+  cursor-local fixture sentinel for a distinct prerequisite and report
+  it as a SQL scope oracle separate from the real matching row. A positive ACK wakes only the
   exact preexisting matching row. Read back ACK, matching retry
   time/revision, and unchanged unrelated scope. Repeating the same
   selection causes zero additional Consent writes or wakes.
@@ -184,7 +209,7 @@ child test file if the new cases obscure the existing ACK proof.
   no settlement/wake and durable unchanged frame/attempt on reopen.
   Lost ACK must retire the port. The fixed five-second native turn
   remains in force. Reuse the prior 60-second exact retry validation,
-  without adding a new live retry round or weakening real clocks.
+  without adding another live Consent retry or weakening real clocks.
 - Arrange one post-ACK wake refusal using a test-only cut at its
   transaction fence. The genuine ACK must remain persisted while
   both retry and clock effects from the failed wake roll back.
