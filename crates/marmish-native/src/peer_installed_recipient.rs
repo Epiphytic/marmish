@@ -1,8 +1,4 @@
 //! Owned startup and teardown for the private installed Manual recipient.
-#![allow(
-    dead_code,
-    reason = "daemon runner mounting follows the recipient service"
-)]
 
 use super::{receiver_inventory::RecoveredOwner, socket::owner::recipient::PeerRecipientPort};
 use crate::{
@@ -214,6 +210,8 @@ async fn attach(
     registration: RegisteredReceiver,
     mut fence: StartupFence<'_>,
 ) -> Result<Completion, Exit> {
+    #[cfg(test)]
+    tests::panic_at("panic_before_attach");
     let mut attached = fence.step(|| registration.attach(lease, material))?;
     let (quota, mut route) = attached.actor_parts();
     let mut owner = fence.step(|| {
@@ -270,6 +268,8 @@ async fn hold_port(
     let Ok(mut port) = port else {
         return Exit::LocalUnavailable;
     };
+    #[cfg(test)]
+    tests::panic_at("panic_in_hold");
     // Until the durable service mounts, detect the physical end only. An
     // incoming record stops this idle owner for recovery by a later service.
     loop {
@@ -294,6 +294,8 @@ async fn revoke_and_reap(
     route: &ReceiverRouteControl<'_, '_>,
     drain: &PeerSocketDrain,
 ) {
+    #[cfg(test)]
+    tests::panic_at("panic_in_reap");
     drop(ready);
     route.revoke();
     while drain.reap(Instant::now() + DRAIN_WAIT).await.is_err() {
@@ -343,6 +345,13 @@ mod tests {
     const ROOT: &str = "MARMISH_TEST_ACTOR_START_ROOT";
     const RUNTIME_SOCKET: usize = 5;
 
+    pub(super) fn panic_at(stage: &str) {
+        assert!(
+            std::env::var(CASE).as_deref() != Ok(stage),
+            "intentional recipient panic at {stage}"
+        );
+    }
+
     #[tokio::test]
     async fn uncaught_thread_panic_cannot_prove_physical_end() {
         let mut actor = Actor {
@@ -374,6 +383,9 @@ mod tests {
             "malformed",
             "replaced_while_preparing",
             "drain_pending",
+            "panic_before_attach",
+            "panic_in_hold",
+            "panic_in_reap",
         ] {
             let mut process = Command::new(std::env::current_exe().unwrap())
                 .args(["--ignored", "--exact", child, "--nocapture"])
@@ -504,18 +516,30 @@ mod tests {
                 actor.stop();
                 Exit::Stopped
             }
-            "fatal_after_open" | "preexisting_empty" => {
+            "panic_before_attach" | "panic_in_hold" => {
+                startup.ordinary_ready();
+                listener.registered();
+                Exit::WorkerFailed
+            }
+            "fatal_after_open" | "preexisting_empty" | "panic_in_reap" => {
                 startup.ordinary_ready();
                 listener.registered();
                 eventually(|| relay.recipient_requests(account) == 1).await;
                 assert!(relay.runtime_socket_active(RUNTIME_SOCKET));
                 assert_ne!(fs::metadata(&cursor).unwrap().len(), 0);
-                if case == "fatal_after_open" {
-                    custody.report();
-                    Exit::GlobalFault
-                } else {
-                    actor.stop();
-                    Exit::Stopped
+                match case.as_str() {
+                    "fatal_after_open" => {
+                        custody.report();
+                        Exit::GlobalFault
+                    }
+                    "panic_in_reap" => {
+                        actor.stop();
+                        Exit::WorkerFailed
+                    }
+                    _ => {
+                        actor.stop();
+                        Exit::Stopped
+                    }
                 }
             }
             "sidecar_only" | "malformed" => {
@@ -527,6 +551,7 @@ mod tests {
         };
         let physical = match case.as_str() {
             "before_ready" | "sidecar_only" | "malformed" => PhysicalEnd::NoStart,
+            "panic_before_attach" | "panic_in_reap" => PhysicalEnd::Unproved,
             _ => PhysicalEnd::Drained,
         };
         let expected = Completion::new(expected, physical);
@@ -539,10 +564,14 @@ mod tests {
         assert_eq!(actor.join_before(Instant::now()).await, Ok(expected));
         assert!(!readiness.is_current());
         match case.as_str() {
-            "fatal_after_open" | "stop_during_auth" | "preexisting_empty" => {
+            "fatal_after_open" | "stop_during_auth" | "preexisting_empty" | "panic_in_hold" => {
                 eventually(|| relay.runtime_socket_end(RUNTIME_SOCKET) == Some(SocketEnd::Raw))
                     .await;
                 assert_eq!(relay.recipient_closes(account), 0);
+            }
+            "panic_before_attach" => {
+                assert!(!cursor.try_exists().unwrap());
+                assert_eq!(relay.qualification_connections(), RUNTIME_SOCKET - 1);
             }
             "sidecar_only" => {
                 assert!(!cursor.try_exists().unwrap());
