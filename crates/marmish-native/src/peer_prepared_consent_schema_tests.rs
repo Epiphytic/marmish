@@ -206,6 +206,20 @@ fn prepared_consent_always_denies_unowned_writes_and_temp_shadow() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Checkpoint {
+    pub(crate) fn consent_fixture_clocks(&self) -> (u64, u64) {
+        let (origin, checkpoint): (i64, i64) = self
+            .cursor
+            .conn
+            .query_row(
+                "SELECT (SELECT wall FROM peer_cursor_origin),
+                    (SELECT wall FROM peer_consent_version)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        (origin.try_into().unwrap(), checkpoint.try_into().unwrap())
+    }
+
     pub(crate) fn fixture_assert_managed_consent_boundaries(
         &mut self,
         source: &Source,

@@ -109,20 +109,3 @@ impl Checkpoint {
         Ok(settled)
     }
 }
-
-#[cfg(test)]
-impl Checkpoint {
-    pub(in crate::peer_invitation) fn consent_fixture_clocks(&self) -> (u64, u64) {
-        let (origin, checkpoint): (i64, i64) = self
-            .cursor
-            .conn
-            .query_row(
-                "SELECT (SELECT wall FROM peer_cursor_origin),
-                    (SELECT wall FROM peer_consent_version)",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        (origin.try_into().unwrap(), checkpoint.try_into().unwrap())
-    }
-}
