@@ -159,3 +159,28 @@ existing no-engine case and stock unit regressions around `command_service`
 and `idle_cleanup_`. Require exact candidate and stock strict Clippy, fresh
 source-matched candidate and stock installations, and independent Claude Code Auto code
 review before reporting the positive proof complete.
+
+## Stock fixture copy-helper binding
+
+The separately installed stock libtest successfully resolves its real
+stock daemon’s receipt and worker. The stock Command startup then resolves
+the canonical copy helper from the libtest’s current executable and
+returns `worker_installation` before listening. The native layout
+intentionally rejects libtest binary names.
+
+For the existing test-only `FixtureTransport` branch in
+`daemon::open_stock`, resolve the claimed fixture daemon exactly once
+and pass the resulting complete `ExecutableLayout` into a test-only
+`MdkOwner::enable_stock_fixture_commands`. Reuse the shared stock Command
+startup body and supply this layout’s worker and canonical helper. Keep
+the normal stock path and all existing native-layout checks. An explicit
+fixture path remains mandatory. The stock child continues checking the
+opposite candidate class, then resolves the matching stock install before
+its profile read. Keep its local control protocol, exact row assertions,
+and stop proof unchanged.
+
+Rerun the exact two independently installed classes and stock child
+after a successful build. Verify both retained rows and the stock
+process’s clean stop. Also rerun the stock Command service checks and
+the sibling same-fence worker-join observation. Record which stage failed
+when debugging. Use sanitized category-only output.
