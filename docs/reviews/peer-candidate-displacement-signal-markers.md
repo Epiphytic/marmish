@@ -10,3 +10,5 @@ Claude Code Sonnet 5.5 independently reviewed the design in Auto mode. R1 (0bac4
 - Auto resumed R3 on exact `ab5cd69` and approved the integrated evidence and exact candidate test binary. The reviewer verified the source and digest, then ran the full diagnostic selector six times. Each run passed 13 tests, with three child entry points exercised by the parent tests. Wall times were 1.09–1.12s. The review kept the installed WSS result on `c12e65a` and did not lift the paired gate.
 
 [Validation and the unresolved Status abort](../validation/peer-candidate-displacement-signal-markers.md) record which source was exercised.
+
+Claude Code Auto session `58257a6b-4e6d-4238-9e48-8f067723e70b` independently approved the integrated diff at `e951e8e`. The previous static review had started before the exact test runner was available. The reviewer verified the runner SHA-256 and ran the diagnostics namespace three times. Each run passed 13 tests, with 3 child-only selectors ignored. The reviewer found the changes test-scoped and the reduced diagnostic output safe for the controller. The underlying dispatcher abort remains unexplained.
