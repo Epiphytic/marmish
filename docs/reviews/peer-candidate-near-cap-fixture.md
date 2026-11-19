@@ -34,3 +34,16 @@ Code R3 checked the final pager reads, singleton custody and stage witnesses,
 and exact SQLite full and rollback guards on the private copy. It reviewed
 source without compiling or running tests. The exact native offline run and
 installed qualification are recorded in the [validation report](../validation/peer-candidate-near-cap-fixture.md).
+
+## Composed fixture and timing oracle
+
+Claude Code Auto session `58de8b4f-204c-4f1f-9ae4-b3377761d964`
+approved the integrated code at `9b30b76`, including the checked
+original and copy, the lifetime and pressure recorder, and the ordinary
+retained result checks. The reviewer ran the exact offline native
+selector with private state. It passed in 25.2 s with the same pager
+geometry as the author's run. The review left installed timing to
+the separately scheduled live exercise. It identified a temporary
+offline fixture directory retained inside its private scratch area.
+The reviewer removed that directory. The installed timing and footprint
+gates require separate evidence.

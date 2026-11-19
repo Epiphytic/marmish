@@ -70,3 +70,10 @@ the original three times and the copy twice before publication. The
 five hash passes alone therefore exceed the one-second ticket lifetime
 at the measured debug speed. A release-profile rerun was started to
 check whether that explains the installed refusal.
+
+The separate ordinary Manual regression passed on the same installed
+debug package pair in 54.11 s. It reached exact Pending 12.972 s
+after Offer, restored the same invitation in 7.601 s after a cold
+restart, and made the local view unavailable within 270 ms of the
+attributed Peer connection loss. Both binary command results survived
+the loss and were read by the separately installed stock daemon.
