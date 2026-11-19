@@ -108,7 +108,29 @@ fn manual_failure_log(log: &File) -> String {
         .join(", ")
 }
 
-async fn mounted(measure_near_cap: bool) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ManualCase {
+    Pending,
+    NearCap,
+    Approve,
+}
+
+async fn expect_no_pending(socket: &Path, selection: peer_read::Selection) {
+    use peer_read::{Failure, Reply, Request, client_request};
+    assert_eq!(
+        client_request(socket, Request::List {}).await,
+        Ok(Reply::List {
+            entries: Vec::new()
+        }),
+    );
+    assert_eq!(
+        client_request(socket, Request::Show { selection }).await,
+        Err(Failure::Unavailable),
+    );
+}
+
+async fn mounted(case: ManualCase) {
+    let measure_near_cap = case == ManualCase::NearCap;
     let example = PathBuf::from(std::env::var_os(EXAMPLE).expect("private example"));
     assert_eq!(example.canonicalize().unwrap(), example);
     let daemon = PathBuf::from(std::env::var_os(DAEMON).expect("installed candidate daemon"));
@@ -146,7 +168,12 @@ async fn mounted(measure_near_cap: bool) {
     let ca = root.path().join("fixture-root.der");
     write_private(&ca, ordinary.qualification_ca());
     let mut args = arguments(&daemon, root.path(), &ordinary, &ca);
-    args.insert(0, "--manual-recipient".into());
+    let intent = if case == ManualCase::Approve {
+        "--manual-approval-recipient"
+    } else {
+        "--manual-recipient"
+    };
+    args.insert(0, intent.into());
     args.insert(0, "--debug".into());
     let recipient_log = tempfile::tempfile_in(root.path()).unwrap();
     let (mut child, mut report, _) =
@@ -232,6 +259,47 @@ async fn mounted(measure_near_cap: bool) {
         .await
         .expect("installed listener still projects verified Pending");
 
+    if case == ManualCase::Approve {
+        use crate::ipc::peer_approve::{self, Failure};
+        let wrong = peer_approve::Selection {
+            generation: exact.selection.generation.checked_add(1).unwrap(),
+            ..exact.selection
+        };
+        assert_eq!(
+            peer_approve::client_request(&socket, wrong).await,
+            Err(Failure::Stale),
+        );
+        let clock = Instant::now();
+        assert_eq!(
+            peer_approve::client_request(&socket, exact.selection).await,
+            Ok(()),
+        );
+        println!(
+            "manual_approval_decision_ms {}",
+            clock.elapsed().as_millis()
+        );
+        let clock = Instant::now();
+        assert_eq!(
+            peer_approve::client_request(&socket, exact.selection).await,
+            Ok(()),
+        );
+        println!("manual_approval_retry_ms {}", clock.elapsed().as_millis());
+        timeout(STEP, async {
+            loop {
+                match peer_read::client_request(&socket, peer_read::Request::List {}).await {
+                    Ok(peer_read::Reply::List { entries }) if entries.is_empty() => break,
+                    Ok(peer_read::Reply::List { entries }) => assert_eq!(entries, [exact]),
+                    Err(peer_read::Failure::Unavailable) => {}
+                    response => panic!("unexpected List response after decision: {response:?}"),
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("published read view stops showing the approved invitation");
+        expect_no_pending(&socket, exact.selection).await;
+    }
+
     let requests_before_loss = peer.recipient_requests(signer);
     let clock = Instant::now();
     peer.retire_recipient_runtime_socket(recipient, signer);
@@ -312,11 +380,28 @@ async fn mounted(measure_near_cap: bool) {
     wait_active(&mut reopened, &socket).await;
     let reopened_recipient = recipient + 2;
     manual_recipient_live(&peer, signer, reopened_recipient).await;
-    let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
-    if measure_near_cap && cold_entry.is_none() {
-        RefreshLog::new(cold_log.try_clone().unwrap()).report_cold_failure();
+    if case == ManualCase::Approve {
+        use crate::ipc::peer_approve::{self, Failure};
+        let retry = timeout(WAIT, async {
+            loop {
+                match peer_approve::client_request(&socket, exact.selection).await {
+                    Err(Failure::Busy | Failure::Unavailable) => {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    result => break result,
+                }
+            }
+        })
+        .await
+        .expect("reopened candidate replies to the original selection");
+        assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
+    } else {
+        let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
+        if measure_near_cap && cold_entry.is_none() {
+            RefreshLog::new(cold_log.try_clone().unwrap()).report_cold_failure();
+        }
+        assert!(cold_entry == Some(exact), "exact cold Pending projection");
     }
-    assert!(cold_entry == Some(exact), "exact cold Pending projection");
     let cold_pending = clock.elapsed();
     let mut qualification_passed = true;
     if let Some(stage) = &near_cap {
@@ -374,11 +459,17 @@ async fn mounted(measure_near_cap: bool) {
 #[test]
 #[ignore = "requires matching installed Linux AMD64 candidate and stock builds"]
 fn installed_registered_manual_pending_and_command() {
-    run_native(LIMIT, || mounted(false));
+    run_native(LIMIT, || mounted(ManualCase::Pending));
 }
 
 #[test]
 #[ignore = "opt-in near-cap benchmark with matching installed Linux AMD64 candidate and stock builds"]
 fn installed_registered_manual_near_cap_refresh() {
-    run_native(LIMIT, || mounted(true));
+    run_native(LIMIT, || mounted(ManualCase::NearCap));
+}
+
+#[test]
+#[ignore = "opt-in local approval over matching installed Linux AMD64 packages and private WSS"]
+fn installed_registered_manual_approval_and_command() {
+    run_native(LIMIT, || mounted(ManualCase::Approve));
 }
