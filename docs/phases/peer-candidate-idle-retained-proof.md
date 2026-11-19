@@ -60,7 +60,8 @@ ordinary identity unchanged across that reopen.
 
 Build and privately install both Linux AMD64 package classes from the same
 source, each with its own same-class packager, daemon, worker and manifest.
-Use distinct prefixes and verify both install receipts. Build the two
+Use separate prefixes, launcher directories, HOME and XDG paths. Verify
+both install receipts. Build the two
 source-matched Linux AMD64 libtest drivers using
 `cargo test --locked -p marmish-native --lib --no-run`. The candidate driver
 uses the reviewed private candidate cfg and runs from the installed version's
@@ -98,10 +99,11 @@ temporary CA. Follow `peer_daemon_wss_tests.rs`'s existing
 no test command or uptime caps and the same direct one-relay policy.
 Set the connector's Arti directory names under the owned profile as
 `arti_state` and `arti_cache`. The daemon's standard stock startup
-acquires and releases its own lease. Parent owns no lease while it runs. It reaches stock `open_stock` and `serve_opened`. The stock resolver refuses the candidate receipt, so the child must use stock
-utilities. Use the same state root, exact identity and untouched configuration
+acquires and releases its own lease. Parent owns no lease while it runs. It reaches stock `open_stock` and `serve_opened`. The stock resolver refuses the candidate manifest class. Require that exact
+refusal before using the independently installed stock utilities. Use the same state root, exact identity and untouched configuration
 across both processes. This
-proves stock cold reopen in a separate process under fixture trust. The
+proves Linux file-backed stock cold reopen in a separate process under
+fixture trust. The
 shipping stock connector uses bundled roots and the markerless candidate
 would reselect Registered for this unchanged profile. Query
 `CommandEvidence` through the existing administrative projection.

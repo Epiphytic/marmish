@@ -11,6 +11,11 @@ pub(super) fn run() {
         let setting = |name| std::env::var_os(name).expect("stock child fixture input");
         let root = PathBuf::from(setting("MARMISH_TEST_STOCK_REOPEN_ROOT"));
         let layout = PathBuf::from(setting("MARMISH_TEST_STOCK_REOPEN_DAEMON"));
+        let candidate = PathBuf::from(setting("MARMISH_TEST_STOCK_REOPEN_CANDIDATE"));
+        assert!(matches!(
+            crate::native_layout::resolve(&candidate),
+            Err(crate::Error::Invalid("install_manifest_class"))
+        ));
         let relay = setting("MARMISH_TEST_STOCK_REOPEN_RELAY")
             .into_string()
             .unwrap();

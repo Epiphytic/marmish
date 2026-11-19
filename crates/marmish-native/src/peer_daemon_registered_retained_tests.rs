@@ -7,6 +7,7 @@ use crate::{
 };
 
 const STOCK: &str = "MARMISH_TEST_REGISTERED_STOCK_LIBTEST";
+const STOCK_DAEMON: &str = "MARMISH_TEST_REGISTERED_STOCK_DAEMON";
 const STOCK_SELECTOR: &str = "peer_invitation::daemon_wss_tests::registered_stock_reopen_child";
 const FIRST: &[u8] = b"one\0; '\"*?[]\xff\r\n";
 const SECOND: &[u8] = b"two\0$HOME \\ &\xfe\n";
@@ -35,12 +36,18 @@ async fn quiet_command_relay(relay: &Relay) {
 fn launch_stock(daemon: &Path, root: &Path, relay: &Relay, ca: &Path) -> OwnedChild {
     let stock = PathBuf::from(std::env::var_os(STOCK).expect("exact stock libtest"));
     assert_eq!(stock.canonicalize().unwrap(), stock);
+    let layout = PathBuf::from(std::env::var_os(STOCK_DAEMON).expect("installed stock daemon"));
+    assert_eq!(layout.canonicalize().unwrap(), layout);
+    assert_eq!(layout.file_name().unwrap(), "marmishd");
+    let prefix = |path: &Path| path.ancestors().nth(3).unwrap().to_owned();
+    assert_ne!(prefix(&layout), prefix(daemon), "separate installs");
     OwnedChild(
         Command::new(stock)
             .args(["--ignored", "--exact", STOCK_SELECTOR, "--nocapture"])
             .env_clear()
             .env("MARMISH_TEST_STOCK_REOPEN_ROOT", root)
-            .env("MARMISH_TEST_STOCK_REOPEN_DAEMON", daemon)
+            .env("MARMISH_TEST_STOCK_REOPEN_DAEMON", layout)
+            .env("MARMISH_TEST_STOCK_REOPEN_CANDIDATE", daemon)
             .env("MARMISH_TEST_STOCK_REOPEN_RELAY", relay.url.as_str())
             .env("MARMISH_TEST_STOCK_REOPEN_CA", ca)
             .stdin(Stdio::piped())
