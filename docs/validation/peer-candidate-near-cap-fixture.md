@@ -49,3 +49,24 @@ without relay traffic. Installed cursor selection, byte and quota
 observation, List and Show, and latency remain separate controller
 evidence. An explicit corrupted-page control was optional in the design
 and was not executed.
+
+## First installed run
+
+The composed Linux AMD64 candidate built, passed strict checks and was
+installed from the checksum-verified package at `9b30b76`. The installed
+near-cap refresh selector reached live Pending on a fresh image and grew
+the exact selected stage. Closed original measurement matched the offline
+geometry and extent above. The subsequent cold candidate did not publish a
+Pending read view within the controller window. It reported 25
+`proof_refused` samples, zero publications, and zero selector failures.
+The selector exited failed after 84.44 seconds. This run establishes
+the installed-stage growth and selection path. Cold charged List and
+Show and the warm timing samples still require a passing installed run.
+
+The refusal label covers both proof assembly and the final ticket clock
+check. A separate diagnostic on the linked unoptimized SHA-256 code
+measured 244.5–255.7 ms per full image hash. The checked native path hashes
+the original three times and the copy twice before publication. The
+five hash passes alone therefore exceed the one-second ticket lifetime
+at the measured debug speed. A release-profile rerun was started to
+check whether that explains the installed refusal.

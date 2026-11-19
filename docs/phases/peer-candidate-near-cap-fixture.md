@@ -109,19 +109,19 @@ native Welcome fixture without any relay traffic. Grow its actual joined
 stage with the same native key, verify closed physical extents, page and
 freelist relationship, shape fingerprint, inode and no sidecars, then use
 its existing native joined readback on a separate checked copy to compare
-exact group/epoch/own leaf and receipt again. Check existing inventory on the
-real installed scope (or in its controller) classifies the prepared inode
-as `Identified` with charge under 128 MiB. The installed cursor offline read
-must show no changed digest or identity. Run fast negatives for wrong key,
+exact group/epoch/own leaf and receipt again. Run fast negatives for wrong key,
 wrong inode, a sidecar and substituted file (symlink, extra hard link, wrong
-mode), existing grown image, an exact 16 MiB image, wrong/missing custody
-selection or absent Prepared state, a too-low max page count on an isolated
+mode), existing grown image, an exact 16 MiB image, a too-low max page count on an isolated
 copy with logical rollback, and a bound receiver VFS. Assert no unrequested
 write and fixed failure category. A corruption control on a disposable copy can demonstrate
 the cipher HMAC check sees stored page corruption if needed.
 
-The separate controller phase must reopen the same profile in a fresh actual
-candidate process and return the same Pending Entry from List and Show after
+The separate controller phase verifies that the installed cursor witness
+accepts the exact Prepared selection and rejects a wrong, missing, or
+non-Prepared selection. Cursor digest and identity must remain unchanged.
+It must reopen the same profile in a fresh actual candidate process, verify
+that the inventory classifies the prepared inode as `Identified`, and return
+the same Pending Entry from List and Show after
 real charged byte-verified native snapshot readback. It must measure actual
 original and copy logical/allocated bytes, before/after native read of the
 copy, actual aggregate (including the fixed 49 MiB cursor reserve and any

@@ -12,6 +12,7 @@ mostly freelist pages.
 | Design amendment | `12e55e5` | `6911fae6-1117-4213-9ba9-f04302322fdf` | Approve |
 | Code R1 | `cdfcef4` | `4b6707a8-8e99-4d41-b3a8-16dde5afa7e4` | Changes required |
 | Code R2 | `df78ef3` | `7e371e53-2dd1-41f8-b072-7be70076d87e` | Approve code with runtime evidence required |
+| Code R3 | `c45c926` | `8aeb596f-eb86-4306-8ce5-298732f58c18` | Approve code, qualification reported separately |
 
 Code R1 found the first native run stopped at a generic pager check,
 the exact custody selection accepted a wider inventory than the design,
@@ -28,3 +29,8 @@ and pager extent are restored. Claude approved moving the small-cap
 negative to a separate 0600 byte copy, checking its logical metadata,
 schema version, integrity and sidecar cleanup, and preserving the
 original stage digest.
+
+Code R3 checked the final pager reads, singleton custody and stage witnesses,
+and exact SQLite full and rollback guards on the private copy. It reviewed
+source without compiling or running tests. The exact native offline run and
+installed qualification are recorded in the [validation report](../validation/peer-candidate-near-cap-fixture.md).
