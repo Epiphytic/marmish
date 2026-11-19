@@ -30,6 +30,8 @@ pub(in crate::peer_invitation) enum Wake {
 pub(in crate::peer_invitation) enum Cut {
     Staged,
     Accepted,
+    #[cfg(test)]
+    Settled,
     WakeBeforeCommit,
 }
 
@@ -149,6 +151,11 @@ impl PeerRecipientPort {
                 return Publication::PossiblyExposed(error);
             }
         };
+        #[cfg(test)]
+        if cut(Cut::Settled).is_err() {
+            self.0.retire();
+            return Publication::Settled(Wake::Failed);
+        }
         Publication::Settled(self.wake_managed_ack(&ack, operation, &window, |checked| {
             owner.wake_managed_delivery(settled, checked, &window, || cut(Cut::WakeBeforeCommit))
         }))

@@ -25,6 +25,7 @@ fn managed_consent_single_port_private_wss() {
     run_cases(&[
         "port-positive",
         "port-wake-cut",
+        "port-wake-stop",
         "port-staged",
         "port-reject",
         "port-lost",
@@ -183,7 +184,7 @@ pub(super) async fn run<'profile>(
     let (carrier, bytes) = queued.fixture_frame();
     let bytes = bytes.to_vec();
     let selector = Selector::from(fixture.offer);
-    let wake = matches!(case, "positive" | "wake-cut");
+    let wake = matches!(case, "positive" | "wake-cut" | "wake-stop");
     let related = if wake {
         let delivery = fixture.defer_delivery(&mut owner, &queued).await;
         let other = [0xa8; 32];
@@ -223,6 +224,7 @@ pub(super) async fn run<'profile>(
     let offset = u64::try_from(image.len() - 1).unwrap();
     let last = *image.last().unwrap();
     let mut cuts = 0;
+    let mut wake_clock = None;
     let start = Instant::now();
     let outcome = if matches!(case, "positive" | "reject" | "lost") {
         fixture
@@ -254,6 +256,22 @@ pub(super) async fn run<'profile>(
                         cuts += 1;
                         Err(Error::Binding)
                     }
+                    ("wake-cut", Cut::Settled) => {
+                        let settled_wall = wall();
+                        let end = Instant::now() + Duration::from_millis(1500);
+                        while wall() <= settled_wall && Instant::now() < end {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        let wake_wall = wall();
+                        assert!(wake_wall > settled_wall);
+                        wake_clock = Some(wake_wall);
+                        Ok(())
+                    }
+                    ("wake-stop", Cut::Settled) => {
+                        cuts += 1;
+                        fixture.stop.store(true, Ordering::Release);
+                        Ok(())
+                    }
                     ("stop", Cut::Accepted) => {
                         cuts += 1;
                         fixture.stop.store(true, Ordering::Release);
@@ -267,7 +285,7 @@ pub(super) async fn run<'profile>(
     let elapsed = start.elapsed();
     let expected = match case {
         "positive" => Publication::Settled(Wake::Completed(1)),
-        "wake-cut" => Publication::Settled(Wake::Failed),
+        "wake-cut" | "wake-stop" => Publication::Settled(Wake::Failed),
         "staged" => Publication::NotSent(Error::StageIdentityMismatch),
         "reject" => Publication::Rejected,
         "lost" => Publication::PossiblyExposed(Error::Socket(Failure::Deadline)),
@@ -277,7 +295,7 @@ pub(super) async fn run<'profile>(
     assert_eq!(outcome, expected);
     assert_eq!(
         cuts,
-        usize::from(matches!(case, "wake-cut" | "staged" | "stop"))
+        usize::from(matches!(case, "wake-cut" | "wake-stop" | "staged" | "stop"))
     );
     if case == "staged" {
         change_image(&file, offset, last);
@@ -297,7 +315,7 @@ pub(super) async fn run<'profile>(
         assert_eq!(write.bytes_len, bytes.len());
         assert_eq!(write.bytes_sha256, <[u8; 32]>::from(Sha256::digest(&bytes)));
     }
-    if matches!(case, "staged" | "lost" | "stop") {
+    if matches!(case, "staged" | "lost" | "stop" | "wake-stop") {
         assert!(matches!(
             fixture.port.wait_live(deadline()).await,
             Err(Failure::Retired)
@@ -320,9 +338,9 @@ pub(super) async fn run<'profile>(
     let (attempt, ack) = stored.fixture_attempt();
     assert_eq!(attempt, 1);
     assert_eq!(ack.is_some(), wake);
-    let retry = stored.fixture_retry_at();
+    let retry = stored.fixture_retry_at().unwrap();
+    assert!(retry > wall());
     if let Some((delivery, prior, other, unrelated)) = related {
-        assert!(retry.is_none());
         assert_eq!(
             owner
                 .checkpoint
@@ -350,20 +368,25 @@ pub(super) async fn run<'profile>(
             assert_eq!(state[..2], floors[..2]);
             assert_eq!(state[2], floors[2]);
             assert_eq!(state[3], ack);
+            if let Some(wake_wall) = wake_clock {
+                assert!(u64::try_from(state[3]).unwrap() < wake_wall);
+            }
         }
-        assert_eq!(
-            fixture
-                .port
-                .publish_managed_consent(
-                    &mut owner,
-                    fixture.quota,
-                    selector,
-                    fixture.readiness.clone(),
-                    fixture.stop.clone(),
-                )
-                .await,
-            Publication::Unavailable
-        );
+        if case != "wake-stop" {
+            assert_eq!(
+                fixture
+                    .port
+                    .publish_managed_consent(
+                        &mut owner,
+                        fixture.quota,
+                        selector,
+                        fixture.readiness.clone(),
+                        fixture.stop.clone(),
+                    )
+                    .await,
+                Publication::Unavailable
+            );
+        }
         assert_eq!(
             owner
                 .checkpoint
@@ -372,7 +395,6 @@ pub(super) async fn run<'profile>(
             state
         );
     } else {
-        assert!(retry.unwrap() > wall());
         let state = owner
             .checkpoint
             .fixture_delivery_state(&owner.source)
