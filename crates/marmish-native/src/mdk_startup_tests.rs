@@ -62,6 +62,10 @@ pub(crate) fn qualify(
 ) {
     crate::native_preflight::check_with_fence(lease, material, Some(&admission.connection_fence()))
         .unwrap();
+    if case == "active_cut" {
+        active_cut(lease, material, connector, admission, fatal, cut);
+        return;
+    }
     if case == "panic_forget" {
         seed_revoked(lease, material, admission);
     }
@@ -218,6 +222,85 @@ pub(crate) fn qualify(
         }
         _ => {}
     }
+}
+
+fn active_cut(
+    lease: &Arc<ProfileLease>,
+    material: &IdentityMaterial,
+    connector: RelayConnector,
+    admission: &Admission,
+    fatal: &Fatal,
+    displace: fn(),
+) {
+    use super::super::DISPATCHER_LOST;
+    use std::future::{Future, poll_fn};
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+    use std::time::{Duration, Instant};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    let mut owner =
+        MdkOwner::open_candidate(lease, material, connector, vec![], admission.clone()).unwrap();
+    assert_eq!(
+        owner.status().unwrap().identity,
+        material.public_key().to_hex()
+    );
+    let journal = evidence(lease.journal_database());
+    let account = evidence(lease.mdk_database());
+    let sockets = socket_count();
+    let mode = owner.active_mode.clone();
+    let polls = Cell::new(0);
+    {
+        let mut native = pin!(mode.native(poll_fn(|_| {
+            polls.set(polls.get() + 1);
+            assert!(owner.storage.key_package_lifecycle().unwrap().is_some());
+            Poll::<()>::Pending
+        })));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(native.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(polls.get(), 1);
+        displace();
+        assert!(
+            !fatal.is_tripped(),
+            "next admitted poll must detect displacement"
+        );
+        assert!(matches!(
+            native.as_mut().poll(&mut cx),
+            Poll::Ready(Err(Error::Storage(DISPATCHER_LOST)))
+        ));
+    }
+    assert!(fatal.is_tripped());
+    assert_eq!(polls.get(), 1);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    runtime.block_on(async {
+        assert!(matches!(
+            owner.activate(deadline).await,
+            Err(Error::Storage(DISPATCHER_LOST))
+        ));
+        assert!(matches!(
+            owner.tick(deadline).await,
+            Err(Error::Storage(DISPATCHER_LOST))
+        ));
+    });
+    assert!(matches!(
+        owner.status(),
+        Err(Error::Storage(DISPATCHER_LOST))
+    ));
+    assert!(matches!(
+        owner.command_count_exit_ready(),
+        Err(Error::Storage(DISPATCHER_LOST))
+    ));
+    assert!(!owner.active && owner.forwarder.is_none());
+    assert_eq!(socket_count(), sockets);
+    assert_eq!(evidence(lease.journal_database()), journal);
+    assert_eq!(evidence(lease.mdk_database()), account);
+    // The active leaf does not retire storage after displacement. The existing
+    // startup custody drops into the registered holder pending physical stop.
+    assert!(descriptors(lease.mdk_database()) > 0);
 }
 
 fn seed_revoked(lease: &ProfileLease, material: &IdentityMaterial, admission: &Admission) {

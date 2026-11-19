@@ -235,6 +235,7 @@ impl MdkOwner {
         &mut self,
         config: Option<&CommandConfig>,
     ) -> Result<()> {
+        self.active_mode.admit()?;
         let empty = BTreeSet::new();
         let clients = config
             .filter(|config| config.role() != crate::command_config::Role::Client)
@@ -335,6 +336,8 @@ impl MdkOwner {
         fresh: Option<Id>,
         deadline: Instant,
     ) -> Result<CommandRoom> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         if !self.active {
             return Err(Error::Mdk("inactive"));
         }
@@ -370,6 +373,7 @@ impl MdkOwner {
         } else {
             deadline
         };
+        mode.admit()?;
         let routing = NostrRoutingV1::new(
             random::<32>()?,
             self.routing.endpoints.iter().map(|v| v.0.clone()).collect(),
@@ -456,14 +460,18 @@ impl MdkOwner {
         };
         #[cfg(test)]
         let updates = self.terminal_authority.stage(None);
-        let (group, effects) =
-            tokio::time::timeout_at(deadline, self.runtime.create_group(request))
-                .await
-                .map_err(|_| Error::Timeout)?
-                .map_err(|_| Error::Mdk("create_group"))?;
+        let (group, effects) = mode
+            .native(tokio::time::timeout_at(
+                deadline,
+                self.runtime.create_group(request),
+            ))
+            .await?
+            .map_err(|_| Error::Timeout)?
+            .map_err(|_| Error::Mdk("create_group"))?;
         let room = match self.accept_command_group(&group, &self.identity.clone()) {
             Ok(room) => room,
             Err(error) => {
+                mode.admit()?;
                 self.command_forget_and_confirm(&group)?;
                 return Err(error);
             }
@@ -473,6 +481,7 @@ impl MdkOwner {
                 && (room.session != super::command_adapter::fixed_hex::<16>(&session)?
                     || room.direction != CommandDirection::Client))
         {
+            mode.admit()?;
             self.command_forget_and_confirm(&group)?;
             return Err(Error::Mdk("command_room_peer"));
         }
@@ -482,9 +491,12 @@ impl MdkOwner {
             return Ok(room);
         }
         self.apply_effects(effects, deadline).await?;
+        mode.admit()?;
         #[cfg(test)]
         self.terminal_finish(updates);
-        mdk(self.runtime.sync_transport_groups(None).await)?;
+        mdk(mode
+            .native(self.runtime.sync_transport_groups(None))
+            .await?)?;
         Ok(room)
     }
     pub(crate) fn command_request(
@@ -529,6 +541,8 @@ impl MdkOwner {
     }
     /// Claim before calling MDK: an interrupted send never creates new ciphertext.
     pub(super) async fn submit_command_publications(&mut self, deadline: Instant) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         use crate::journal::{CommandNativeUpdate, PublicationState};
         if self.commands.is_none() {
             return Ok(());
@@ -542,6 +556,7 @@ impl MdkOwner {
             .journal
             .command_publications(PublicationState::Unsubmitted, 64)?
         {
+            mode.admit()?;
             let group = GroupId::new(publication.key.group.clone());
             match self.command_context(&group) {
                 Ok(_) => {}
@@ -556,16 +571,17 @@ impl MdkOwner {
             };
             #[cfg(test)]
             let authority_updates = self.terminal_authority.stage(Some(&group));
-            let effects = tokio::time::timeout_at(
-                deadline,
-                self.runtime.send(SendIntent::AppMessage {
-                    group_id: group,
-                    payload: publication.encoded_app_event,
-                    expected_epoch: None,
-                }),
-            )
-            .await
-            .map_err(|_| Error::Timeout)?;
+            let effects = mode
+                .native(tokio::time::timeout_at(
+                    deadline,
+                    self.runtime.send(SendIntent::AppMessage {
+                        group_id: group,
+                        payload: publication.encoded_app_event,
+                        expected_epoch: None,
+                    }),
+                ))
+                .await?
+                .map_err(|_| Error::Timeout)?;
             let effects = mdk(effects)?;
             let updates = effects
                 .queued
@@ -580,16 +596,20 @@ impl MdkOwner {
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
+            mode.admit()?;
             self.journal.command_apply_native(&updates)?;
             self.apply_effects(effects, deadline).await?;
+            mode.admit()?;
             #[cfg(test)]
             self.terminal_finish(authority_updates);
         }
+        mode.admit()?;
         let native_fanouts = mdk(self.storage.list_outbound_fanouts())?;
         for publication in self
             .journal
             .command_publications(PublicationState::Prepared, 64)?
         {
+            mode.admit()?;
             let group = GroupId::new(publication.key.group.clone());
             let retained = native_fanouts.iter().any(|fanout| {
                 fanout.group_id() == Some(&group)
@@ -597,6 +617,7 @@ impl MdkOwner {
                         application.app_event_id == publication.key.app_event_id
                     })
             });
+            mode.admit()?;
             let queued = mdk(self.storage.list_queued_outbound_intents(&group))?;
             // Any queued intent can still own this ambiguity. Convergence alone
             // may retire it; this path never invokes send again.
@@ -949,18 +970,24 @@ impl MdkOwner {
         group: &GroupId,
         deadline: Instant,
     ) -> Result<()> {
+        let mode = self.active_mode.clone();
+        mode.admit()?;
         if mdk(self.runtime.has_pending_convergence_inputs(group))?
             || mdk(self.runtime.has_queued_outbound_intents(group))?
         {
             self.ensure_application_group(group)?;
             #[cfg(test)]
             let updates = self.terminal_authority.stage(Some(group));
-            let effects =
-                tokio::time::timeout_at(deadline, self.runtime.advance_convergence(group))
-                    .await
-                    .map_err(|_| Error::Timeout)?
-                    .map_err(|_| Error::Transport("convergence"))?;
+            let effects = mode
+                .native(tokio::time::timeout_at(
+                    deadline,
+                    self.runtime.advance_convergence(group),
+                ))
+                .await?
+                .map_err(|_| Error::Timeout)?
+                .map_err(|_| Error::Transport("convergence"))?;
             self.apply_effects(effects, deadline).await?;
+            mode.admit()?;
             #[cfg(test)]
             self.terminal_finish(updates);
         }
