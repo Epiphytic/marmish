@@ -17,3 +17,10 @@ The installed composition must report that distinction as an uncertain outcome.
 
 See [validation](../validation/peer-candidate-ipc-fatal.md) for the author runs
 and exact test scope.
+
+Claude Code Auto session `b7f52005-a452-4105-81ce-759b2f2734f9` approved
+the exact composition `0cab7eb` with the reviewed recipient and Command
+startup code. It independently confirmed byte-identical IPC sources and
+repeated both archived IPC suites. Strict all-targets engine/native Clippy
+passed on the composed stock and candidate trees. The production daemon
+continues to use the default listener entry.
