@@ -870,6 +870,8 @@ async fn registered_idle_prelude_quiesces_real_engine_before_runtime_cleanup() {
     let client = Keys::generate().public_key().to_bytes();
     fixture.install_engine(&mut owner, &admission, "wss://127.0.0.1:9/", client);
     wait_for_idle_engine(&mut owner).await;
+    let retained_rows = owner.journal.command_server_records(None, 1).unwrap().len();
+    assert_eq!(retained_rows, 0);
     let binding = owner
         .terminal_authority
         .register(AuthenticatedCommandContext::test_fixture(
@@ -891,7 +893,7 @@ async fn registered_idle_prelude_quiesces_real_engine_before_runtime_cleanup() {
     assert!(stop.complete(|| fixture.lease.cleanup_runtime()).is_ok());
     assert_eq!(Arc::strong_count(&fixture.lease), 1);
     eprintln!(
-        "idle registered prelude and physical stop: {:?}, retained_rows=0",
+        "idle registered prelude and physical stop: {:?}, retained_rows={retained_rows}",
         began.elapsed()
     );
 }

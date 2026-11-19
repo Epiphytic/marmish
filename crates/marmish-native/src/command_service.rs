@@ -662,6 +662,13 @@ impl CommandService {
         if self.cleanup_snapshot_readonly() != (CleanupState::Draining, Some(expected)) {
             return Err(Error::Invalid("command_cleanup_fence"));
         }
+        if !self
+            .engine
+            .as_mut()
+            .is_some_and(CommandEngine::idle_stop_ready)
+        {
+            return Err(Error::Storage("command_cleanup_busy"));
+        }
         let check = || fence.check();
         let mut turn = CleanupTurn {
             gate: Some(&check),

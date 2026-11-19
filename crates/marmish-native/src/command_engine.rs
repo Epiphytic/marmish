@@ -339,10 +339,13 @@ impl CommandEngine {
         }
         result
     }
-    fn collect(&mut self) {
+    /// Drain ready events and report whether the worker channel is still open.
+    fn collect(&mut self) -> bool {
         while !self.mode.tripped() {
-            let Ok(event) = self.events.try_recv() else {
-                break;
+            let event = match self.events.try_recv() {
+                Ok(event) => event,
+                Err(TryRecvError::Empty) => return true,
+                Err(TryRecvError::Disconnected) => return false,
             };
             if self.mode.tripped() {
                 break;
@@ -366,6 +369,7 @@ impl CommandEngine {
                 Event::LivePrepared(result) => self.live_prepared.push_back(*result),
             }
         }
+        false
     }
     pub fn readiness(&mut self) -> Readiness {
         self.collect();
@@ -381,7 +385,9 @@ impl CommandEngine {
     }
     pub(super) fn idle_stop_ready(&mut self) -> bool {
         !self.copy_gc_pending
-            && self.readiness() == Readiness::Ready
+            && self.collect()
+            && !self.mode.tripped()
+            && self.readiness == Readiness::Ready
             && self
                 .thread
                 .as_ref()
@@ -1668,6 +1674,73 @@ mod tests {
             crx,
             tx,
         )
+    }
+
+    #[test]
+    fn idle_cleanup_rejects_disconnected_events_before_worker_join() {
+        let (mut handle, _operations, _controls, events) = handle();
+        let (release, wait) = mpsc::channel();
+        handle.thread = Some(thread::spawn(move || wait.recv().unwrap()));
+        assert!(handle.idle_stop_ready());
+        drop(events);
+        assert!(handle.readiness() == Readiness::Ready);
+        assert!(!handle.idle_stop_ready());
+        assert!(!handle.thread.as_ref().unwrap().is_finished());
+        release.send(()).unwrap();
+        handle.thread.take().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn idle_cleanup_keeps_queued_and_unapplied_copy_gc_busy() {
+        let (mut handle, _operations, controls, events) = handle();
+        let (release, wait) = mpsc::channel();
+        handle.thread = Some(thread::spawn(move || wait.recv().unwrap()));
+        assert!(handle.idle_stop_ready());
+        use marmish_stream::copy_protocol as cp;
+        assert!(
+            handle
+                .try_copy_gc(CopyGcRequest {
+                    key: "test".into(),
+                    revision: 1,
+                    launch: cp::Launch {
+                        version: cp::VERSION,
+                        mode: cp::AttemptMode::Create,
+                        transfer: [3; 32],
+                        client: [1; 32],
+                        server: [2; 32],
+                        direction: cp::Direction::Get,
+                        source: b"source".to_vec(),
+                        destination: b"destination".to_vec(),
+                        overwrite: false,
+                        preserve_mode: false,
+                        preserve_mtime: false,
+                    },
+                    stream: [1; 16],
+                    cwd: std::path::PathBuf::from("."),
+                    timestamp: 1,
+                })
+                .is_ok()
+        );
+        assert!(!handle.idle_stop_ready());
+        let Control::CopyGc(request) = controls.try_recv().unwrap() else {
+            panic!("expected exact copy reclamation control");
+        };
+        assert!(
+            events
+                .send(Event::CopyGc(Box::new(CopyGcCompletion {
+                    key: request.key,
+                    revision: request.revision,
+                    cleaned: true,
+                })))
+                .is_ok()
+        );
+        assert!(handle.collect());
+        assert_eq!(handle.copy_gc_completed.as_ref().unwrap().revision, 1);
+        assert!(!handle.idle_stop_ready());
+        assert!(handle.take_copy_gc().is_some());
+        assert!(handle.idle_stop_ready());
+        release.send(()).unwrap();
+        handle.thread.take().unwrap().join().unwrap();
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
