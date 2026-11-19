@@ -360,7 +360,7 @@ pub(crate) struct NativeAttestation {
 }
 
 impl NativeAttestation {
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
     pub(super) fn fixture_managed(
         (binding, witness): (Binding, FileWitness),
         package: NativePackage,

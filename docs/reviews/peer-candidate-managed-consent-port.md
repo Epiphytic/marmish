@@ -20,3 +20,13 @@ genuinely later wall time. The fixes use existing product semantics.
 For the deliberately retired or failed sends, the matrix checks the
 exact retained durable retry and relay transcript. Live repeat checks
 are limited to the successful settlement and the rolled-back wake.
+
+Claude Code Auto approved the integrated patch at `d2c1b5f` in
+`58005b8b-8b9b-41b2-8baf-813986316a81`. It verified matching changed
+blobs and stable patch ID, with no file overlap or new reachability
+from the registered Command changes. Author strict stock Clippy on
+the composition passed in 29.44 s. The private WSS measurements above
+and in the validation report use the exact author source before
+composition. The review suggested a test-only gate for the only
+fixture constructor that does not require a managed proof. The
+follow-up adds that gate.

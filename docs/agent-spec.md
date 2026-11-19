@@ -102,7 +102,11 @@ qualifies original native generation and independent cold attestation from
 the exact registered quota and checked route. Fresh SQLCipher setup is
 metered separately from signing. Linux AMD64 process tests include source
 and charge mismatches, recovery and signed-only replay. Candidate daemon
-invitation intake remains a separate integration. The
+invitation intake remains a separate integration.
+The [managed Consent port proof](validation/peer-candidate-managed-consent-port.md)
+tests publication, durable ACK settlement and Delivery wake in the same
+checked connection using a private isolated fixture. Mounted invitation
+handling remains a separate integration. The
 [storage and listener composition](validation/peer-candidate-owner-leaves-composition.md)
 qualifies the managed queued-package reader, borrowed Pending over private
 WSS, account custody across dispatcher cuts, and the same-user read
