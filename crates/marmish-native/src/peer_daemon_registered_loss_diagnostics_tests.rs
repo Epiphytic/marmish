@@ -124,10 +124,12 @@ async fn stale_status_socket_uses_a_non_consuming_kernel_snapshot() {
             .unwrap(),
         b'x'
     );
-    drop(peer);
+    peer.shutdown().await.unwrap();
     assert_eq!(status_socket_state(&controller), "closed");
 
-    let (mut controller, peer) = AsyncUnixStream::pair().unwrap();
+    let (controller, peer) = UnixStream::pair().unwrap();
+    controller.set_nonblocking(true).unwrap();
+    let mut controller = AsyncUnixStream::from_std(controller).unwrap();
     controller.write_all(b"x").await.unwrap();
     drop(peer);
     assert_eq!(status_socket_state(&controller), "reset");
