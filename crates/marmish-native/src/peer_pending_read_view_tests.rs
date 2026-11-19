@@ -433,7 +433,7 @@ fn refresh_timing_uses_actual_admission_and_reports_both_prior_deadlines() {
         monotonic: start.monotonic + Duration::from_millis(monotonic_ms),
         continuous: start.continuous + Duration::from_millis(continuous_ms),
     };
-    let clocks = |monotonic_ms, continuous_ms| {
+    let clocks = |monotonic_ms: i64, continuous_ms: i64| {
         Some(Clocks {
             monotonic_ns: monotonic_ms * 1_000_000,
             continuous_ns: continuous_ms * 1_000_000,
