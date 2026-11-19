@@ -1,7 +1,7 @@
 //! Offline SQLCipher allocation for the disposable installed Manual proof.
 
 use super::{
-    paths::{CheckedFile, Paths},
+    paths::{CheckedFile, Paths, ProvisionalFile},
     store::consent_checkpoint::{
         Route, Selector,
         provisioning::{
@@ -259,7 +259,7 @@ fn require_free_space(file: &File) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Pages {
     size: u64,
     count: u64,
@@ -424,6 +424,51 @@ fn allocate(conn: &mut Connection, target: u64) -> Result<u64> {
     Err("stage_allocate")
 }
 
+fn verify_small_cap(original: &ProvisionalFile, key: &SqlCipherKey) {
+    use std::fs::{OpenOptions, Permissions};
+    use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+    let private = tempfile::Builder::new()
+        .permissions(Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let copy = private.path().join("rollback.db");
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&copy)
+        .unwrap();
+    let source = original.read_file().unwrap();
+    let len = source.metadata().unwrap().len();
+    assert!((1..START_CAP).contains(&len));
+    assert_eq!(
+        io::copy(&mut source.take(START_CAP), &mut out).unwrap(),
+        len
+    );
+    original.ensure_unchanged().unwrap();
+    drop(out);
+    let mut conn = keyed(&copy, OpenFlags::SQLITE_OPEN_READ_WRITE, key).unwrap();
+    let pages = Pages::read(&conn).unwrap();
+    let schema = Schema::read(&conn).unwrap();
+    let schema_version = integer_pragma(&conn, "schema_version").unwrap();
+    assert_eq!(
+        enlarge(&mut conn, len, len + pages.size + 1).err(),
+        Some("stage_page_full")
+    );
+    assert!(conn.is_autocommit());
+    assert!(Pages::read(&conn).unwrap() == pages);
+    assert!(Schema::read(&conn).unwrap() == schema);
+    assert_eq!(
+        integer_pragma(&conn, "schema_version").unwrap(),
+        schema_version
+    );
+    integrity(&conn).unwrap();
+    conn.close().unwrap();
+    assert_eq!(copy.metadata().unwrap().len(), len);
+    assert_eq!(private.path().read_dir().unwrap().count(), 1);
+}
+
 pub(super) fn verify_joined_fixture(paths: &Paths<'_>, (binding, witness): (Binding, FileWitness)) {
     use std::fs::{self, OpenOptions, Permissions};
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _, symlink};
@@ -456,9 +501,9 @@ pub(super) fn verify_joined_fixture(paths: &Paths<'_>, (binding, witness): (Bind
         .and_then(|conn| integrity(&conn))
         .is_err()
     );
-    assert_eq!(
-        grow_selected(paths, binding, witness, before.len() + 4097).err(),
-        Some("stage_page_full")
+    verify_small_cap(
+        &original,
+        &SqlCipherKey::raw(*paths.provisional_key(binding)),
     );
     assert_eq!(original.digest().unwrap(), start_digest);
 

@@ -85,9 +85,10 @@ With cache spill off and no other writers, a transaction journals each
 preexisting page at most once and only the bounded main database can be
 journaled. A SQLITE_FULL rollback can re-encrypt restored pages, changing
 ciphertext without changing the SQL state. The offline test exercises the
-low-cap refusal on a separate disposable copy, verifies retained pager
-extent, schema and integrity there, and verifies the untouched original's
-closed digest. Any growth error invalidates its destination, including an
+low-cap refusal on a separate 0600 byte copy of the closed original in a
+private directory, verifies retained pager extent, schema, SQLite schema
+version and integrity there, and verifies the untouched original's closed
+digest. Any growth error invalidates its destination, including an
 ambiguous commit or a hot journal.
 
 Before returning, require scratch table absence, equal permanent schema and
@@ -115,8 +116,8 @@ must show no changed digest or identity. Run fast negatives for wrong key,
 wrong inode, a sidecar and substituted file (symlink, extra hard link, wrong
 mode), existing grown image, an exact 16 MiB image, wrong/missing custody
 selection or absent Prepared state, a too-low max page count on an isolated
-copy with logical rollback, and a bound receiver VFS. Assert no unrequested write and fixed
-failure category. A corruption control on a disposable copy can demonstrate
+copy with logical rollback, and a bound receiver VFS. Assert no unrequested
+write and fixed failure category. A corruption control on a disposable copy can demonstrate
 the cipher HMAC check sees stored page corruption if needed.
 
 The separate controller phase must reopen the same profile in a fresh actual
@@ -134,3 +135,8 @@ or public availability.
 Claude Code Auto approved design `650556c` in session
 `675cf22b-e02d-43cc-a971-92aacbf9423b`. Its nonblocking findings refined
 the integrity check, headroom, and per-row stop condition above.
+
+Claude Code Auto approved recovery-check amendment `12e55e5` in session
+`6911fae6-1117-4213-9ba9-f04302322fdf` after reproducing SQLCipher ciphertext
+changes on logical rollback. It requested the explicit copied-file mode and
+schema version check incorporated above.
