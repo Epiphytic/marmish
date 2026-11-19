@@ -17,7 +17,7 @@ use std::{path::Path, sync::Arc};
 
 enum Selection {
     Stock(PreparedProfile, RelayConnector),
-    Registered(RegisteredStartup),
+    Registered(Box<RegisteredStartup>),
     Indeterminate(Arc<ProfileLease>),
 }
 
@@ -34,7 +34,7 @@ struct RegisteredStartup {
 
 struct RegisteredOwner {
     lease: Arc<ProfileLease>,
-    _receiver: RegisteredReceiver,
+    receiver: RegisteredReceiver,
     fatal: Fatal,
     admission: Option<Admission>,
     owner: Option<Box<MdkOwner>>,
@@ -54,7 +54,6 @@ fn eligible(loaded: &LoadedProfile) -> bool {
 fn select(
     prepared: PreparedProfile,
     connector: RelayConnector,
-    lifetime: Arc<ServiceLifetime>,
     eligible_before_prepare: bool,
 ) -> Result<Selection> {
     let PreparedProfile { loaded, material } = prepared;
@@ -68,27 +67,30 @@ fn select(
             connector,
         ));
     }
-    let lease = Arc::new(loaded.lease);
+    let mut loaded = loaded;
     let commands = loaded
         .commands
-        .as_ref()
+        .take()
         .ok_or(Error::Invalid("commands_disabled"))?;
-    let preflight = ReceiverPreflight::prepare(&lease, &material, commands);
+    let lifetime = Arc::new(loaded.origin.constrain(commands.limits().max_uptime)?);
+    if lifetime.expired()? {
+        return Err(Error::Timeout);
+    }
+    let lease = Arc::new(loaded.lease);
+    let preflight = ReceiverPreflight::prepare(&lease, &material, &commands);
     if let Ok(Some(preflight)) = preflight {
         match preflight.register(&lease, &material) {
             Ok(receiver) => {
-                return Ok(Selection::Registered(RegisteredStartup {
+                return Ok(Selection::Registered(Box::new(RegisteredStartup {
                     lease,
                     receiver,
                     connector,
                     material,
                     peers: loaded.peers,
-                    commands: loaded
-                        .commands
-                        .expect("registration requires Command config"),
+                    commands,
                     lifetime,
                     retention: loaded.retention,
-                }));
+                })));
             }
             Err(RegistrationFailure::Untouched) => {}
             Err(RegistrationFailure::LocalUnavailable) => {
@@ -102,7 +104,11 @@ fn select(
     let lease = Arc::try_unwrap(lease).map_err(|_| Error::Identity("candidate_startup_custody"))?;
     Ok(Selection::Stock(
         PreparedProfile {
-            loaded: LoadedProfile { lease, ..loaded },
+            loaded: LoadedProfile {
+                lease,
+                commands: Some(commands),
+                ..loaded
+            },
             material,
         },
         connector,
@@ -115,13 +121,13 @@ impl RegisteredStartup {
         let mut selected = RegisteredOwner {
             fatal: self.receiver.forwarding_verifier().fatal(),
             lease: self.lease,
-            _receiver: self.receiver,
+            receiver: self.receiver,
             owner: None,
             admission: None,
         };
         let opened = (|| {
             let fence = selected
-                ._receiver
+                .receiver
                 .take_command_fence()
                 .map_err(|_| Error::Storage("candidate_dispatcher_lost"))?;
             let admission = Admission::from_registered(fence);
@@ -157,9 +163,293 @@ impl RegisteredStartup {
                 worker,
                 admission.clone(),
             )?;
+            if !admission.admit() {
+                return Err(Error::Storage("candidate_dispatcher_lost"));
+            }
             owner.command_set_lifetime(self.lifetime);
             Ok(())
         })();
         (selected, opened)
+    }
+}
+
+use crate::{
+    daemon_launch::candidate_child::{ChildChannel, Interrupt},
+    ipc::{self, Pending, Request, Response},
+};
+use std::{
+    future::{Future, poll_fn},
+    pin::{Pin, pin},
+    task::Context,
+    time::Duration,
+};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+    time::{Instant, MissedTickBehavior},
+};
+
+#[derive(Default)]
+struct Listener {
+    drain: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<Result<()>>>,
+    outcome: Option<std::result::Result<Result<()>, tokio::task::JoinError>>,
+}
+
+impl Listener {
+    fn start(
+        &mut self,
+        lease: &ProfileLease,
+        fatal: &Fatal,
+    ) -> Result<(mpsc::Receiver<Pending>, watch::Sender<Response>)> {
+        let listener = ipc::bind(&lease.socket_path())?;
+        let (drain, drained) = oneshot::channel();
+        let (queue, requests) = mpsc::channel(64);
+        let (status, snapshots) = watch::channel(Response::success(
+            serde_json::json!({"state": "activating"}),
+        ));
+        let fatal = fatal.clone();
+        let task = tokio::spawn(async move {
+            ipc::serve_with_listener(
+                listener,
+                queue,
+                snapshots,
+                None,
+                #[cfg(test)]
+                None,
+                Some(drained),
+                #[cfg(test)]
+                None,
+                ipc::CandidateListener::registered(fatal, None),
+            )
+            .await
+        });
+        self.drain = Some(drain);
+        self.task = Some(task);
+        Ok((requests, status))
+    }
+
+    fn poll_exit(&mut self, cx: &mut Context<'_>) -> bool {
+        if let Some(task) = self.task.as_mut()
+            && let std::task::Poll::Ready(outcome) = Pin::new(task).poll(cx)
+        {
+            self.outcome = Some(outcome);
+            self.task = None;
+        }
+        self.outcome.is_some()
+    }
+
+    fn start_drain(&mut self) {
+        if let Some(drain) = self.drain.take() {
+            let _ = drain.send(());
+        }
+    }
+}
+
+fn admit(admission: &Admission) -> Result<()> {
+    if !admission.admit() {
+        return Err(Error::Storage("candidate_dispatcher_lost"));
+    }
+    Ok(())
+}
+
+async fn finite_dispatch(
+    owner: &mut MdkOwner,
+    profile: &str,
+    rooms: &mut crate::command_local::RoomIntents,
+    request: Request,
+) -> Result<Response> {
+    match request {
+        Request::CommandPrepare { .. }
+        | Request::CommandSubmit { .. }
+        | Request::CommandStatus { .. }
+        | Request::CommandCancel { .. }
+        | Request::CommandPoll { .. }
+        | Request::CommandResponse { .. }
+        | Request::CommandCursors { .. }
+        | Request::CommandUnconsumed { .. }
+        | Request::CommandInvocations { .. }
+        | Request::CommandConsume { .. }
+        | Request::ClientInventory { .. } => super::dispatch(owner, profile, rooms, request).await,
+        _ => Err(Error::Invalid("registered_command_only")),
+    }
+}
+
+impl RegisteredOwner {
+    async fn serve(
+        &mut self,
+        listener: &mut Listener,
+        channel: Option<ChildChannel>,
+    ) -> Result<()> {
+        let admission = self
+            .admission
+            .as_ref()
+            .ok_or(Error::Storage("candidate_dispatcher_lost"))?;
+        let owner = self
+            .owner
+            .as_mut()
+            .ok_or(Error::Identity("candidate_startup_custody"))?;
+        let lifetime = owner
+            .command_lifetime()
+            .ok_or(Error::Identity("candidate_startup_custody"))?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut shutdown = pin!(async {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = terminate.recv() => {},
+            }
+        });
+        let mut expired = pin!(async {
+            while !lifetime.expired().unwrap_or(true) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+
+        admit(admission)?;
+        let (mut requests, status) = listener.start(&self.lease, &self.fatal)?;
+        let fatal = &self.fatal;
+        let mut interrupt = |cx: &mut Context<'_>| {
+            if shutdown.as_mut().poll(cx).is_ready() {
+                Some(Interrupt::Shutdown)
+            } else if expired.as_mut().poll(cx).is_ready() {
+                Some(Interrupt::Expired)
+            } else if listener.poll_exit(cx) {
+                Some(Interrupt::ListenerExited)
+            } else {
+                None
+            }
+        };
+
+        let mut stopped = pin!(fatal.tripped());
+        tokio::select! {
+            biased;
+            _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
+            reason = poll_fn(|cx| match interrupt(cx) {
+                Some(reason) => std::task::Poll::Ready(reason),
+                None => std::task::Poll::Pending,
+            }) => return Err(interruption(reason)),
+            outcome = owner.activate(Instant::now() + Duration::from_secs(150)) => outcome?,
+        }
+        // The status published after C is computed under the same admission.
+        // Any post-C cut suppresses the status and proceeds to live shutdown.
+        admit(admission)?;
+        let mut snapshot =
+            serde_json::to_value(owner.status()?).map_err(|_| Error::Invalid("status_encoding"))?;
+        snapshot["state"] = serde_json::json!("active");
+        if let Some(channel) = channel {
+            let _commit = channel
+                .exchange(admission, fatal, interrupt)
+                .await
+                .map_err(report_failure)?;
+        } else {
+            let reason = poll_fn(|cx| std::task::Poll::Ready(interrupt(cx))).await;
+            if let Some(reason) = reason {
+                return Err(interruption(reason));
+            }
+            admit(admission)?;
+        }
+        admit(admission)?;
+        status.send_replace(Response::success(snapshot));
+        let profile = self
+            .lease
+            .root()
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(Error::Invalid("identity_name"))?;
+
+        let mut rooms = crate::command_local::RoomIntents::default();
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        loop {
+            admit(admission)?;
+            if owner.command_count_exit_ready()? {
+                return Ok(());
+            }
+            tokio::select! {
+                biased;
+                _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
+                _ = shutdown.as_mut() => return Ok(()),
+                _ = expired.as_mut() => return Ok(()),
+                _ = poll_fn(|cx| {
+                    if listener.poll_exit(cx) {
+                        std::task::Poll::Ready(())
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                }) => return Err(Error::Invalid("ipc_listener_stopped")),
+                pending = requests.recv() => {
+                    let pending = pending.ok_or(Error::Invalid("ipc_listener_stopped"))?;
+                    admit(admission)?;
+                    if pending.deadline <= Instant::now() || pending.respond.is_closed() {
+                        continue;
+                    }
+                    let reply = tokio::select! {
+                        biased;
+                        _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
+                        _ = shutdown.as_mut() => return Ok(()),
+                        _ = expired.as_mut() => return Ok(()),
+                        result = finite_dispatch(owner, profile, &mut rooms, pending.request) => result,
+                    };
+                    admit(admission)?;
+                    let _ = pending.respond.send(reply.unwrap_or_else(super::failure));
+                }
+                _ = interval.tick() => {
+                    let turn = tick(owner, &mut rooms);
+                    let degraded = tokio::select! {
+                        biased;
+                        _ = stopped.as_mut() => return Err(Error::Storage("candidate_dispatcher_lost")),
+                        _ = shutdown.as_mut() => return Ok(()),
+                        _ = expired.as_mut() => return Ok(()),
+                        result = turn => result?,
+                    };
+                    admit(admission)?;
+                    let mut snapshot = serde_json::to_value(owner.status()?)
+                        .map_err(|_| Error::Invalid("status_encoding"))?;
+                    snapshot["state"] = serde_json::json!(if degraded { "transport_degraded" } else { "active" });
+                    admit(admission)?;
+                    status.send_replace(Response::success(snapshot));
+                }
+            }
+        }
+    }
+}
+
+async fn tick(owner: &mut MdkOwner, rooms: &mut crate::command_local::RoomIntents) -> Result<bool> {
+    let degraded = match owner.tick(Instant::now() + Duration::from_secs(15)).await {
+        Ok(()) => false,
+        Err(Error::Transport(_) | Error::Timeout) => true,
+        Err(error) => return Err(error),
+    };
+    if let Some(remote) = rooms.next(Instant::now()) {
+        let deadline =
+            Instant::now() + Duration::from_secs(crate::command_local::ROOM_TURN_SECONDS);
+        if let Err(error) = owner.command_open_room_turn(remote, deadline).await {
+            if matches!(error, Error::Storage("candidate_dispatcher_lost")) {
+                return Err(error);
+            }
+            rooms.failed(remote, Instant::now(), super::room_failure_category(&error));
+        }
+    }
+    Ok(degraded)
+}
+
+fn interruption(reason: Interrupt) -> Error {
+    match reason {
+        Interrupt::Shutdown => Error::Invalid("candidate_startup_stopped"),
+        Interrupt::Expired => Error::Timeout,
+        Interrupt::ListenerExited => Error::Invalid("ipc_listener_stopped"),
+    }
+}
+
+fn report_failure(failure: crate::daemon_launch::candidate_child::Failure) -> Error {
+    use crate::daemon_launch::candidate_child::Failure;
+    match failure {
+        Failure::Fatal | Failure::Admission => Error::Storage("candidate_dispatcher_lost"),
+        Failure::Interrupted(reason) => interruption(reason),
+        Failure::TimedOut => Error::Timeout,
+        Failure::Acknowledgement | Failure::ParentEof | Failure::Socket(_) => {
+            Error::DaemonStartup("registered readiness exchange failed".into())
+        }
     }
 }

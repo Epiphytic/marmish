@@ -398,7 +398,6 @@ async fn run_inner(
     #[cfg(test)] fixture: Option<PeerFixture>,
     #[cfg(test)] candidate: Option<candidate_lifecycle::Fixture>,
 ) -> Result<()> {
-    use std::sync::Arc;
     #[cfg(test)]
     let transport = fixture
         .as_ref()
@@ -414,6 +413,24 @@ async fn run_inner(
         transport,
     )
     .await?;
+    serve_opened(
+        opened,
+        startup,
+        #[cfg(test)]
+        fixture,
+        #[cfg(test)]
+        candidate,
+    )
+    .await
+}
+
+async fn serve_opened(
+    opened: Opened,
+    startup: Option<crate::daemon_launch::StartupReporter>,
+    #[cfg(test)] fixture: Option<PeerFixture>,
+    #[cfg(test)] candidate: Option<candidate_lifecycle::Fixture>,
+) -> Result<()> {
+    use std::sync::Arc;
     let Opened {
         profile,
         mut owner,
@@ -780,17 +797,7 @@ async fn serve_owner(
                             result=owner.command_open_room_turn(remote,deadline)=>result,
                         };
                         if let Err(error)=result {
-                            let category=match error {
-                                Error::Timeout=>"command_room_discovery_timeout",
-                                Error::Invalid("command_unauthorized")=>"command_room_unauthorized",
-                                Error::Invalid("command_room_capacity")=>"command_room_capacity",
-                                Error::Invalid("command_preparation_capacity")=>"command_preparation_capacity",
-                                Error::Invalid("command_room_uncertain")=>"command_room_uncertain",
-                                Error::Invalid("command_room_start_expired")=>"command_room_start_expired",
-                                Error::Invalid("clock_behind_floor")=>"command_room_clock",
-                                Error::Storage(_)=>"command_room_cleanup",
-                                _=>"command_room_creation",
-                            };
+                            let category = room_failure_category(&error);
                             room_intents.failed(remote,Instant::now(),category);
                         }
                     }
@@ -824,6 +831,20 @@ async fn serve_owner(
     server.abort();
     let _ = server.await;
     result
+}
+
+fn room_failure_category(error: &Error) -> &'static str {
+    match error {
+        Error::Timeout => "command_room_discovery_timeout",
+        Error::Invalid("command_unauthorized") => "command_room_unauthorized",
+        Error::Invalid("command_room_capacity") => "command_room_capacity",
+        Error::Invalid("command_preparation_capacity") => "command_preparation_capacity",
+        Error::Invalid("command_room_uncertain") => "command_room_uncertain",
+        Error::Invalid("command_room_start_expired") => "command_room_start_expired",
+        Error::Invalid("clock_behind_floor") => "command_room_clock",
+        Error::Storage(_) => "command_room_cleanup",
+        _ => "command_room_creation",
+    }
 }
 
 fn listener_stop(outcome: std::result::Result<Result<()>, tokio::task::JoinError>) -> Result<()> {

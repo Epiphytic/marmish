@@ -55,6 +55,7 @@ impl CountDrain {
 /// A launch-local suspend-aware deadline; never reconstruct from wall time.
 /// Capture before profile/config/database/network work. Callers must recheck after
 /// every bounded wait (at most 100ms) and before new admission/dispatch.
+#[derive(Clone, Copy)]
 pub(crate) struct ServiceLifetime {
     origin: Duration,
     deadline: Option<Duration>,
