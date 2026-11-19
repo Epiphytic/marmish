@@ -30,3 +30,9 @@ and in the validation report use the exact author source before
 composition. The review suggested a test-only gate for the only
 fixture constructor that does not require a managed proof. The
 follow-up adds that gate.
+
+Claude Code Auto approved the follow-up `50a3cf5` in
+`d528ac6c-f172-4ef4-8dd3-340380baae1c`. It confirmed that the
+only caller is test-only and the enclosing module already had the
+same restriction. The new attribute records the fixture boundary
+at the constructor as well. The reviewer ran no additional tests.
