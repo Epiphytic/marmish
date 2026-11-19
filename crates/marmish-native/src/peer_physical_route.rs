@@ -16,6 +16,7 @@ use crate::{
 ))]
 use crate::{
     dispatcher_fatal::Fatal,
+    peer_relay_trust::candidate_registration::ForwardingVerifier,
     transport::{PeerSocketDrain, PeerSocketStart},
 };
 use nostr::{
@@ -403,6 +404,7 @@ pub(crate) struct NativeRouteWindow<'a> {
 ))]
 #[derive(Clone)]
 pub(crate) struct NativeRouteFence {
+    forwarding: Option<ForwardingVerifier>,
     cancel: CancellationToken,
     fatal: Fatal,
     wall: Duration,
@@ -425,7 +427,10 @@ impl NativeRouteFence {
     }
 
     pub(crate) fn is_current(&self) -> bool {
-        !self.cancel.is_cancelled()
+        self.forwarding
+            .as_ref()
+            .is_none_or(|verifier| verifier.recheck_default().is_ok())
+            && !self.cancel.is_cancelled()
             && !self.fatal.is_tripped()
             && tokio::time::Instant::now() < self.horizon
     }
@@ -477,6 +482,26 @@ impl NativeRouteWindow<'_> {
             stop,
             signed_end_exclusive,
             self.fence.clone(),
+        )
+    }
+
+    pub(crate) fn manual_window(
+        &self,
+        readiness: crate::peer_candidate_startup::Readiness,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+        signed_end_exclusive: u64,
+        forwarding: &ForwardingVerifier,
+    ) -> Result<crate::peer_invitation::NativeWindow> {
+        if !self.matches_fatal(&forwarding.fatal()) {
+            return Err(Error::Invalid("peer_receiver_forwarding"));
+        }
+        let mut fence = self.fence.clone();
+        fence.forwarding = Some(forwarding.clone());
+        crate::peer_invitation::NativeWindow::start_checked(
+            readiness,
+            stop,
+            signed_end_exclusive,
+            fence,
         )
     }
 }
@@ -554,6 +579,7 @@ impl LivePhysicalRoute {
         Ok(NativeRouteWindow {
             route: self,
             fence: NativeRouteFence {
+                forwarding: None,
                 wall: self.route.clock.effective_wall(),
                 cancel: self.cancellation(),
                 fatal: self.fatal.as_ref().ok_or(CLOCK_ERROR)?.clone(),
@@ -722,6 +748,7 @@ async fn native_window_honors_absolute_route_horizon_and_fatal_cut() {
     let (trip, fatal) = Trip::new();
     let cancel = CancellationToken::new();
     let route = NativeRouteFence {
+        forwarding: None,
         cancel: cancel.clone(),
         fatal,
         wall,
