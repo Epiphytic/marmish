@@ -19,7 +19,7 @@ pub(crate) mod accept_receipt_wire;
 pub(crate) mod daemon_peer;
 #[cfg(test)]
 #[path = "peer_daemon_wss_tests.rs"]
-mod daemon_wss_tests;
+pub(crate) mod daemon_wss_tests;
 #[cfg(all(
     any(test, marmish_peer_receiver_candidate),
     target_os = "linux",

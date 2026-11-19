@@ -439,6 +439,10 @@ async fn finite_dispatch(
 #[path = "peer_daemon_registered_loss_tests.rs"]
 pub(crate) mod registered_loss;
 
+#[cfg(test)]
+#[path = "peer_daemon_registered_manual_listener_tests.rs"]
+mod manual_listener_tests;
+
 impl RegisteredOwner {
     async fn serve(
         &mut self,

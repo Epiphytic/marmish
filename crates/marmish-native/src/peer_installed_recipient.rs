@@ -610,10 +610,12 @@ mod tests {
                         actor.stop();
                         Exit::WorkerFailed
                     }
-                    _ => {
+                    "preexisting_empty" => {
+                        eventually(|| ADMITTED_EDGES.load(Ordering::Acquire) == 2).await;
                         actor.stop();
                         Exit::Stopped
                     }
+                    _ => unreachable!(),
                 }
             }
             "sidecar_only" | "malformed" => {
@@ -625,8 +627,7 @@ mod tests {
         };
         if let Some(reader) = reader {
             eventually(|| AT_VIEW_REAP.load(Ordering::Acquire)).await;
-            // Listener registration stays alive and holds no view permit.
-            // Inspect the Reader directly, without its readiness or fatal fence.
+            // Inspect the Reader directly without its readiness or fatal fence.
             assert!(reader.admit(NonZeroU64::MIN).is_none());
             let expected_admissions = if case == "open_refused" { 1 } else { 2 };
             assert_eq!(ADMITTED_EDGES.load(Ordering::Acquire), expected_admissions);

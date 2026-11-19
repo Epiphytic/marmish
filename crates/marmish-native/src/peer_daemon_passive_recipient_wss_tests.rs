@@ -9,7 +9,7 @@ use tokio::{
 const PROBE_CONNECTIONS: usize = 4;
 const PROVISIONAL_HOLD: Duration = Duration::from_secs(2);
 
-pub(super) async fn eventually(label: &'static str, predicate: impl Fn() -> bool) {
+pub(crate) async fn eventually(label: &'static str, predicate: impl Fn() -> bool) {
     timeout(WAIT, async {
         while !predicate() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -48,7 +48,7 @@ fn no_recipient_dial(peer: &Relay, signer: PublicKey) {
     assert_eq!(peer.all_publication_attempts(), 0);
 }
 
-pub(super) async fn recipient_live(peer: &Relay, signer: PublicKey, round: usize) -> usize {
+pub(crate) async fn recipient_live(peer: &Relay, signer: PublicKey, round: usize) -> usize {
     let socket = PROBE_CONNECTIONS + round;
     eventually("authenticated recipient subscription", || {
         peer.recipient_requests(signer) >= round

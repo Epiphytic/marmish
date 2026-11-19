@@ -9,7 +9,7 @@ mod postjoin_private_wss;
     target_arch = "x86_64"
 ))]
 #[path = "peer_daemon_registered_qualification_tests.rs"]
-mod registered_qualification;
+pub(crate) mod registered_qualification;
 
 #[cfg(all(
     not(marmish_peer_receiver_candidate),
@@ -55,9 +55,9 @@ use tokio::{sync::oneshot, task::JoinHandle, time::timeout};
 
 const PROFILE: &str = "recipient";
 const STEP: Duration = Duration::from_secs(5);
-const WAIT: Duration = Duration::from_secs(35);
+pub(crate) const WAIT: Duration = Duration::from_secs(35);
 
-fn run_native<F, Fut>(limit: Duration, body: F)
+pub(crate) fn run_native<F, Fut>(limit: Duration, body: F)
 where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()>,
@@ -83,7 +83,7 @@ where
     }
 }
 
-fn private() -> TempDir {
+pub(crate) fn private() -> TempDir {
     tempfile::Builder::new()
         .permissions(Permissions::from_mode(0o700))
         .tempdir()
