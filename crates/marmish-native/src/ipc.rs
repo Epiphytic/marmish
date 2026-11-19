@@ -41,6 +41,22 @@ pub(crate) mod peer_read;
 #[path = "peer_read_listener.rs"]
 pub(crate) mod peer_read_listener;
 
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_approve_ipc.rs"]
+pub(crate) mod peer_approve;
+
+#[cfg(all(
+    marmish_peer_receiver_candidate,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+#[path = "peer_approve_listener.rs"]
+pub(crate) mod peer_approve_listener;
+
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Request {
@@ -51,6 +67,14 @@ pub(crate) enum Request {
     #[cfg(marmish_peer_receiver_candidate)]
     PeerRead {
         request: peer_read::Request,
+    },
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    PeerApprove {
+        request: peer_approve::Request,
     },
     TerminalStart {
         request: terminal_handshake::Start,
@@ -140,6 +164,14 @@ impl Request {
         if matches!(self, Self::PeerRead { .. }) {
             return false;
         }
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if matches!(self, Self::PeerApprove { .. }) {
+            return false;
+        }
         #[cfg(test)]
         if matches!(self, Self::Peer { .. }) {
             return false;
@@ -159,6 +191,14 @@ impl Request {
     pub(crate) fn uses_short_exchange(&self) -> bool {
         #[cfg(marmish_peer_receiver_candidate)]
         if matches!(self, Self::PeerRead { .. }) {
+            return true;
+        }
+        #[cfg(all(
+            marmish_peer_receiver_candidate,
+            target_os = "linux",
+            target_arch = "x86_64"
+        ))]
+        if matches!(self, Self::PeerApprove { .. }) {
             return true;
         }
         #[cfg(test)]
@@ -375,7 +415,11 @@ impl SocketFence {
         read_frame(stream).await
     }
 
-    async fn write(&self, stream: &mut UnixStream, response: &Response) -> Result<()> {
+    async fn write(
+        &self,
+        stream: &mut (impl AsyncWrite + Unpin),
+        response: &Response,
+    ) -> Result<()> {
         #[cfg(all(
             marmish_peer_receiver_candidate,
             target_os = "linux",
@@ -766,7 +810,9 @@ pub(crate) async fn serve_with_listener(
     ))]
     let (read_offer, passive) = match registered.registration {
         CandidateRegistration::None => (None, None),
-        CandidateRegistration::View(offer) => (offer.register(&listener), None),
+        CandidateRegistration::View(offer) => {
+            (offer.register(&listener, fence.fatal.as_ref()), None)
+        }
         CandidateRegistration::Passive(passive) => (None, passive.register(&listener)),
     };
     let receive_drain = async {
@@ -844,6 +890,8 @@ pub(crate) async fn serve_with_listener(
                 let intake = peer.as_ref().map(|(_, intake)| intake.clone());
                 #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
                 let read_intake = read_offer.as_ref().map(peer_read_listener::Offer::intake);
+                #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                let approval = read_offer.as_ref().and_then(peer_read_listener::Offer::approval);
                 tasks.spawn(async move {
                     let _permit = permit;
                     let exchange_deadline = accepted_at + IO_TIMEOUT;
@@ -875,6 +923,14 @@ pub(crate) async fn serve_with_listener(
                     #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
                     if let (Some(intake), Ok(Ok(Request::PeerRead { request }))) = (&read_intake, &result) {
                         intake.write(*request, &mut stream, exchange_deadline, &fence).await;
+                        return;
+                    }
+                    #[cfg(all(marmish_peer_receiver_candidate, target_os = "linux", target_arch = "x86_64"))]
+                    if let Ok(Ok(Request::PeerApprove { request })) = result {
+                        peer_approve_listener::serve(
+                            approval.as_ref(), request, stream, _uid,
+                            accepted_at, exchange_deadline, &fence,
+                        ).await;
                         return;
                     }
                     let short_exchange = matches!(&result,Ok(Ok(request)) if request.uses_short_exchange());
@@ -953,18 +1009,23 @@ mod tests {
         let (_status, status) =
             watch::channel(Response::success(serde_json::json!({"state":"active"})));
         let task = tokio::spawn(serve(listener, queue, status));
-        let mut stream = UnixStream::connect(&path).await.unwrap();
-        write_frame(
-            &mut stream,
-            &serde_json::json!({"operation":"peer_read","request":{"kind":"list"}}),
-        )
-        .await
-        .unwrap();
-        let response: Response = tokio::time::timeout(IO_TIMEOUT, read_frame(&mut stream))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(response.error.as_deref(), Some("invalid_request"));
+        let key = nostr::key::Keys::generate().public_key();
+        use nostr::nips::nip19::ToBech32 as _;
+        for wire in [
+            serde_json::json!({"operation":"peer_read","request":{"kind":"list"}}),
+            serde_json::json!({"operation":"peer_approve","request":{"version":1,"selection":{
+                "server":key.to_bech32().unwrap(), "offer_id":"00".repeat(16),
+                "revision":"01".repeat(32), "generation":1
+            }}}),
+        ] {
+            let mut stream = UnixStream::connect(&path).await.unwrap();
+            write_frame(&mut stream, &wire).await.unwrap();
+            let response: Response = tokio::time::timeout(IO_TIMEOUT, read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.error.as_deref(), Some("invalid_request"));
+        }
         assert!(matches!(
             incoming.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)

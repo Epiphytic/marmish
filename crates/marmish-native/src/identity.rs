@@ -195,6 +195,15 @@ impl ProfileLease {
         Self::from_locked(root, name, lock, Some(manifest))
     }
 
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn checked_owner_uid(&self) -> Result<u32> {
+        checked_owner_uid(&self._lock)
+    }
+
     fn authorization_request(&self) -> Result<Zeroizing<Vec<u8>>> {
         let m = self
             .manifest
@@ -724,7 +733,12 @@ pub(crate) fn open_private(path: &Path, create: bool) -> Result<File> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
-    let m = f.metadata()?;
+    checked_owner_uid(&f)?;
+    Ok(f)
+}
+
+fn checked_owner_uid(file: &File) -> Result<u32> {
+    let m = file.metadata()?;
     if !m.is_file()
         || m.nlink() != 1
         || m.uid() != unsafe { libc::geteuid() }
@@ -732,7 +746,7 @@ pub(crate) fn open_private(path: &Path, create: bool) -> Result<File> {
     {
         return Err(Error::Identity("unsafe_profile_file"));
     }
-    Ok(f)
+    Ok(m.uid())
 }
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = OpenOptions::new()

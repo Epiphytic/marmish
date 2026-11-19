@@ -288,6 +288,14 @@ async fn dispatch(
     if matches!(request, Request::PeerRead { .. }) {
         return Err(Error::Invalid("peer_local_operation"));
     }
+    #[cfg(all(
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    if matches!(request, Request::PeerApprove { .. }) {
+        return Ok(Response::failure(crate::ipc::peer_approve::UNAVAILABLE));
+    }
     #[cfg(test)]
     if matches!(request, Request::Peer { .. }) {
         return Err(Error::Invalid("peer_local_operation"));

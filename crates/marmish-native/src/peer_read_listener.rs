@@ -15,6 +15,7 @@ pub(crate) struct Offer {
     path: PathBuf,
     registration: ListenerRegistration,
     intake: Intake,
+    approval: Option<super::peer_approve_listener::Listener>,
 }
 
 impl Offer {
@@ -44,18 +45,47 @@ impl Offer {
                 path,
                 registration,
                 intake,
+                approval: None,
             },
             producer,
         ))
     }
 
-    pub(super) fn register(self, listener: &UnixListener) -> Option<Self> {
+    pub(super) fn register(self, listener: &UnixListener, fatal: Option<&Fatal>) -> Option<Self> {
         let bound = listener.local_addr().ok()?;
         if bound.as_pathname() != Some(self.path.as_path()) {
             return None;
         }
+        if self
+            .approval
+            .as_ref()
+            .is_some_and(|approval| !approval.register(listener, fatal))
+        {
+            return None;
+        }
         self.registration.registered();
         Some(self)
+    }
+
+    pub(super) fn approval(&self) -> Option<super::peer_approve_listener::Intake> {
+        self.approval
+            .as_ref()
+            .map(super::peer_approve_listener::Listener::intake)
+    }
+
+    #[cfg(test)]
+    pub(super) fn pair_approval_for_test(
+        &mut self,
+        lease: std::sync::Arc<crate::identity::ProfileLease>,
+    ) -> super::peer_approve_listener::Worker {
+        let (listener, worker) = super::peer_approve_listener::pair(
+            self.path.clone(),
+            lease,
+            self.intake.readiness.clone(),
+            self.intake.fatal.clone(),
+        );
+        self.approval = Some(listener);
+        worker
     }
 
     pub(super) fn intake(&self) -> Intake {
