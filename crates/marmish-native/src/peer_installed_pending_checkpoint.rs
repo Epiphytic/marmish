@@ -282,7 +282,7 @@ fn read_pending_custody_row(
 
 #[cfg(marmish_peer_receiver_candidate)]
 fn require_sole_pending(tx: &Transaction<'_>) -> Result<()> {
-    let pending: u64 = tx.query_row(
+    let pending: i64 = tx.query_row(
         "SELECT count(*) FROM peer_pending_custody WHERE state=2",
         [],
         |row| row.get(0),

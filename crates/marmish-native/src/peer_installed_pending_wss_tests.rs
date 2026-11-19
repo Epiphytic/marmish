@@ -582,12 +582,18 @@ async fn run_recipient(
     assert_eq!(material.public_key().to_bytes(), setup.receiver);
     let lease = Arc::new(lease);
     let route = Route::configured(&setup.origin).unwrap();
-    let mut port = PeerRecipientPort::open(
-        ReceiverRouteAdmission::fixture(lease.clone(), &material).unwrap(),
-        deadline(),
-    )
-    .await
-    .unwrap();
+    let admission = ReceiverRouteAdmission::fixture(lease.clone(), &material).unwrap();
+    #[cfg(marmish_peer_receiver_candidate)]
+    let (admission, fixture_cut) = if scenario == "joined" && matches!(step, "qualify" | "replay") {
+        let (trip, fatal) = crate::dispatcher_fatal::Trip::new();
+        let (guarded, drain) = admission.fixture_guarded(fatal).unwrap();
+        (guarded, Some((trip, drain)))
+    } else {
+        (admission, None)
+    };
+    let mut port = PeerRecipientPort::open(admission, deadline())
+        .await
+        .unwrap();
     if step == "held" {
         drive_held(public, &lease, &material, &route, &mut port).await;
         return;
@@ -929,6 +935,12 @@ async fn run_recipient(
             }
         }
         _ => panic!("unknown Pending child step"),
+    }
+    #[cfg(marmish_peer_receiver_candidate)]
+    if let Some((trip, drain)) = fixture_cut {
+        trip.trip();
+        drop(port);
+        drain.reap(deadline()).await.unwrap();
     }
 }
 

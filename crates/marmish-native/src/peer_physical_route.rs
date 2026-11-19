@@ -216,6 +216,24 @@ impl ReceiverRouteAdmission {
         })
     }
 
+    #[cfg(all(
+        test,
+        marmish_peer_receiver_candidate,
+        target_os = "linux",
+        target_arch = "x86_64"
+    ))]
+    pub(crate) fn fixture_guarded(
+        mut self,
+        fatal: crate::dispatcher_fatal::Fatal,
+    ) -> Result<(Self, PeerSocketDrain)> {
+        if self.start.is_some() {
+            return Err(Error::Invalid("peer_fixture_guard"));
+        }
+        let (start, drain) = PeerSocketStart::pair(self.route.profile.cancel.clone(), fatal)?;
+        self.start = Some(start);
+        Ok((self, drain))
+    }
+
     pub(crate) async fn open(
         mut self,
         max_frame_bytes: usize,
