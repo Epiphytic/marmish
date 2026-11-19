@@ -315,6 +315,7 @@ impl Consumed {
         self.0.matches_lease(lease)
     }
 
+    #[cfg(test)]
     pub(crate) fn deadline(&self) -> Instant {
         self.0.deadline()
     }

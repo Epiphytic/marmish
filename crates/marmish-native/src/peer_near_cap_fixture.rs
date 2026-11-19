@@ -124,6 +124,93 @@ pub(crate) fn grow(
     result
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct CommittedApproval {
+    pub(crate) decided: u64,
+    pub(crate) origin_floor: u64,
+    pub(crate) consent_floor: u64,
+    stage: (u64, u64),
+}
+
+pub(crate) fn committed_approval(
+    lease: &ProfileLease,
+    material: &IdentityMaterial,
+    relay: &str,
+    entry: &Entry,
+) -> Result<CommittedApproval> {
+    let paths = Paths::new(lease, material).map_err(|_| "profile")?;
+    let route = Route::configured(relay).map_err(|_| "origin")?;
+    let cursor = paths.cursor().map_err(|_| "cursor_identity")?;
+    let conn = keyed(
+        cursor.path(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+        &SqlCipherKey::raw(*paths.cursor_key()),
+    )?;
+    let selection = entry.selection;
+    let saved = conn
+        .query_row(
+            "SELECT c.activating_at,o.wall,v.wall,s.device,s.inode
+             FROM peer_pending_custody c
+             JOIN peer_cursor_origin o ON o.origin=c.origin
+             JOIN peer_consent_version v ON v.singleton=1 AND v.account=c.account
+             JOIN peer_provisional_stage_v1 s
+                ON s.class=c.class AND s.generation=c.generation AND s.server=c.server
+                AND s.offer_id=c.offer_id AND s.revision=c.offer_revision AND s.origin=c.origin
+             WHERE c.class=0 AND c.state=3 AND c.approval=0 AND s.state=2
+                AND c.account=?1 AND c.origin=?2 AND c.server=?3 AND c.offer_id=?4
+                AND c.offer_revision=?5 AND c.generation=?6",
+            rusqlite::params![
+                material.public_key().to_bytes(),
+                route.id,
+                selection.server.to_bytes(),
+                selection.offer_id,
+                selection.revision,
+                selection.generation,
+            ],
+            |row| {
+                Ok(CommittedApproval {
+                    decided: row.get(0)?,
+                    origin_floor: row.get(1)?,
+                    consent_floor: row.get(2)?,
+                    stage: (
+                        u64::from_be_bytes(row.get(3)?),
+                        u64::from_be_bytes(row.get(4)?),
+                    ),
+                })
+            },
+        )
+        .map_err(|_| "activating_selection")?;
+    if saved.decided >= entry.expires_at
+        || saved.origin_floor < saved.decided
+        || saved.consent_floor < saved.decided
+    {
+        return Err("decision_floor");
+    }
+    let stage_matches = (0..16)
+        .filter_map(|index| {
+            use super::paths::StageSlot;
+            let stage = paths.stage(StageSlot::new(index).ok()?).ok()?;
+            let meta = std::fs::symlink_metadata(stage.path()).ok()?;
+            Some((meta.dev(), meta.ino()))
+        })
+        .filter(|identity| *identity == saved.stage)
+        .count();
+    if stage_matches != 1 {
+        return Err("keeper_identity");
+    }
+    cursor.unchanged().map_err(|_| "cursor_identity")?;
+    Ok(saved)
+}
+
+impl CommittedApproval {
+    pub(crate) fn same_decision(&self, previous: &Self) -> bool {
+        self.decided == previous.decided
+            && self.stage == previous.stage
+            && self.origin_floor >= previous.origin_floor
+            && self.consent_floor >= previous.consent_floor
+    }
+}
+
 fn read_pending(
     paths: &Paths<'_>,
     cursor: &CheckedFile,

@@ -365,6 +365,11 @@ async fn mounted(case: ManualCase) {
     let stopped = clock.elapsed();
     assert!(!socket.exists());
     let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
+    let committed_approval = (case == ManualCase::Approve).then(|| {
+        let identity = material(&mut cold_lease, &daemon);
+        near_cap_fixture::committed_approval(&cold_lease, &identity, peer.url.as_str(), &exact)
+            .expect("exact Activating row, monotonic floors and retained keeper")
+    });
     let near_cap = measure_near_cap.then(|| {
         let cold_identity = material(&mut cold_lease, &daemon);
         assert!(
@@ -422,7 +427,7 @@ async fn mounted(case: ManualCase) {
         .expect("reopened candidate replies to the original selection");
         assert_eq!(retry, Ok(()), "read-only exact approval retry after reopen");
         assert_manual_requests(&peer, signer, reopened_recipient);
-        assert_eq!(peer.qualification_connections(), reopened_recipient + 1);
+        assert_eq!(peer.qualification_connections(), reopened_recipient);
         expect_no_pending(&socket, exact.selection).await;
     } else {
         let cold_entry = pending(&socket, &offered, &delivered, Instant::now() + WAIT).await;
@@ -451,6 +456,14 @@ async fn mounted(case: ManualCase) {
     reopened.stop().await;
     assert!(!socket.exists());
     let mut cold_lease = ProfileLease::acquire_ready(root.path(), PROFILE).unwrap();
+    if let Some(committed) = committed_approval {
+        let identity = material(&mut cold_lease, &daemon);
+        let reopened =
+            near_cap_fixture::committed_approval(&cold_lease, &identity, peer.url.as_str(), &exact)
+                .expect("exact Activating state and keeper still retained");
+        assert!(reopened.same_decision(&committed));
+    }
+
     if let Some(stage) = near_cap {
         let cold_identity = material(&mut cold_lease, &daemon);
         stage
