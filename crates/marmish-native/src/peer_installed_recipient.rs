@@ -274,6 +274,8 @@ async fn hold_port(
         Service::Passive => None,
         Service::Manual(producer) => Some(producer),
     };
+    #[cfg(test)]
+    tests::assert_manual_view_admitted();
     let deadline = match fence.deadline() {
         Ok(deadline) => deadline,
         Err(exit) => return exit,
@@ -292,7 +294,10 @@ async fn hold_port(
         return Exit::LocalUnavailable;
     };
     #[cfg(test)]
-    tests::panic_at("panic_in_hold");
+    {
+        tests::assert_manual_view_admitted();
+        tests::panic_at("panic_in_hold");
+    }
     // Until the durable service mounts, detect the physical end only. An
     // incoming record stops this idle owner for recovery by a later service.
     loop {
@@ -365,7 +370,10 @@ mod tests {
         os::unix::fs::{OpenOptionsExt, symlink},
         path::Path,
         process::{Command, Stdio},
-        sync::atomic::{AtomicBool, Ordering},
+        sync::{
+            OnceLock,
+            atomic::{AtomicBool, AtomicU8, Ordering},
+        },
     };
     use tokio::time::timeout;
 
@@ -374,6 +382,15 @@ mod tests {
     const RUNTIME_SOCKET: usize = 5;
     static AT_VIEW_REAP: AtomicBool = AtomicBool::new(false);
     static RELEASE_VIEW_REAP: AtomicBool = AtomicBool::new(false);
+    static ADMITTED_EDGES: AtomicU8 = AtomicU8::new(0);
+    static MANUAL_READER: OnceLock<crate::ipc::peer_read::pending_view::Reader> = OnceLock::new();
+
+    pub(super) fn assert_manual_view_admitted() {
+        if let Some(reader) = MANUAL_READER.get() {
+            assert!(reader.admit(NonZeroU64::MIN).is_some());
+            ADMITTED_EDGES.fetch_add(1, Ordering::Release);
+        }
+    }
 
     fn observes_manual_view(case: &str) -> bool {
         matches!(case, "open_refused" | "preexisting_empty" | "panic_in_hold")
@@ -536,6 +553,7 @@ mod tests {
             let (producer, reader) = crate::ipc::peer_read::pending_view::pair(NonZeroU64::MIN)
                 .expect("one private projection");
             assert!(reader.admit(NonZeroU64::MIN).is_some());
+            assert!(MANUAL_READER.set(reader.clone()).is_ok());
             (Service::Manual(producer), Some(reader))
         } else {
             (Service::Passive, None)
@@ -610,6 +628,8 @@ mod tests {
             // Listener registration stays alive and holds no view permit.
             // Inspect the Reader directly, without its readiness or fatal fence.
             assert!(reader.admit(NonZeroU64::MIN).is_none());
+            let expected_admissions = if case == "open_refused" { 1 } else { 2 };
+            assert_eq!(ADMITTED_EDGES.load(Ordering::Acquire), expected_admissions);
             assert_eq!(actor.join_before(Instant::now()).await, Err(Incomplete));
             RELEASE_VIEW_REAP.store(true, Ordering::Release);
         }

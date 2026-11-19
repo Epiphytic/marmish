@@ -18,6 +18,11 @@ pub(crate) struct Offer {
 }
 
 impl Offer {
+    #[cfg(test)]
+    pub(super) fn reader_for_test(&self) -> Reader {
+        self.intake.reader.clone()
+    }
+
     pub(crate) fn new(
         path: PathBuf,
         registration: ListenerRegistration,

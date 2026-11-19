@@ -69,10 +69,6 @@ impl Fatal {
         target_os = "linux",
         target_arch = "x86_64"
     ))]
-    #[allow(
-        dead_code,
-        reason = "ordinary candidate physical cut remains unmounted"
-    )]
     pub(crate) fn same_lifetime(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
     }

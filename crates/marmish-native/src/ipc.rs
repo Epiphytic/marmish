@@ -448,6 +448,14 @@ impl PassiveRegistration {
     target_arch = "x86_64"
 ))]
 impl CandidateListener {
+    #[cfg(test)]
+    pub(crate) fn view_reader_for_test(&self) -> Option<peer_read::pending_view::Reader> {
+        match &self.registration {
+            CandidateRegistration::View(offer) => Some(offer.reader_for_test()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn registered(
         fatal: crate::dispatcher_fatal::Fatal,
         offer: Option<peer_read_listener::Offer>,
