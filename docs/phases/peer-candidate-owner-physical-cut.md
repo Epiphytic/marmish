@@ -75,8 +75,8 @@ raw slots concurrently under a single caller deadline. Runner readiness uses
 async sleep to poll the actual worker completion marker. The runner publishes
 that marker after returning or unwinding and dropping child and pipe handles.
 This does not establish that the OS child was reaped. At a true marker, read
-the same uncertainty flag as the normal keeper under the runner state mutex,
-without copying output. A caught panic, failed exit observation or cleanup can
+the same uncertainty flag as the normal keeper through a mutex-only accessor
+in `stream_runner.rs`, without copying output. A caught panic, failed exit observation or cleanup can
 publish a finished marker with uncertainty; it can never prove physical exit.
 An unfinished member keeps the aggregate runner check Pending until the next
 observation, and any finished-but-uncertain member keeps the final runner
@@ -110,7 +110,8 @@ but Drop alone cannot enforce the caller's process lifetime.
 
 ## Validation
 
-Run existing engine channel/join and raw multi-slot barrier regressions. Add a
+Run the existing stream runner and command lifecycle suites, and the engine
+channel/join and raw multi-slot barrier regressions. Add a
 small fixture using the actual owner and a direct connector carrying a test
 trip. Verify unfenced, untripped, already-stopping and wrong-engine-latch entry
 refuse without changing the owner. A previously closed connector slot produces
@@ -124,7 +125,7 @@ that cut and while the owner remains parked.
 
 Inject a controlled panic before child spawn through the same real runner
 thread catch path used for ordinary work, using a fixture-only entry to the
-worker body. Use a bounded gate so the first observation sees Pending and
+worker body. Extract one shared catch-and-finished path for both entries. Use a bounded gate so the first observation sees Pending and
 release the gate so the actual thread publishes failed/uncertain then
 finished. Do not leave an actual orphan child. Verify both flags using the
 real runner, then observe PossiblyLive, the other barriers settling, exact
@@ -144,3 +145,14 @@ owner cut and reuses prior lower-level raw ABI tests for per-poll forbiddance.
 It is not a claim about all traffic at daemon scope, a production sqlite
 dispatcher replacement, or storage-destructor behavior. Preserve previous real
 engine-channel and multi-route slot qualifications.
+
+
+## Uncertainty amendment review
+
+Claude Code Sonnet in Auto mode approved `2036738` in session
+`25cba1d2-3a37-47b3-add4-a52ec71ef002`. The independent daemon stop design
+review identified the old marker-only false retirement; this amendment
+supersedes that part of the ordinary physical cut. The reviewer verified the
+runner's release/acquire ordering, the engine waiter's actual OS join semantics,
+and retention of the parked lease. The approved test uses the real shared
+thread catch and completion path and leaves no orphan child.
