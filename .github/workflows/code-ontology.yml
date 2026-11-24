@@ -1,0 +1,36 @@
+name: Code ontology
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [master]
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  freshness:
+    name: Ontology freshness
+    # Public PR code must run on disposable, credential-free infrastructure.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve the event commit
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          source_commit="$(git rev-parse --verify "$GITHUB_SHA^{commit}")"
+          test "$source_commit" = "$(git rev-parse HEAD)"
+          printf 'source=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/code-ontology
+        with:
+          source-commit: ${{ steps.source.outputs.source }}
+      - name: Test extraction and NVIDIA model compatibility
+        run: sh tools/code-ontology/test.sh

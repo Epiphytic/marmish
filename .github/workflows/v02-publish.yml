@@ -48,6 +48,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           INSPECTION_ROOT: ${{ runner.temp }}/publish-inputs
         run: node tools/v02-actions/release-candidate.mjs inspect
+      - name: Read the verified candidate source commit
+        id: candidate-source
+        if: steps.inspect.outputs.skip == 'false'
+        env:
+          INSPECTION_ROOT: ${{ runner.temp }}/publish-inputs
+          INSPECTION_SHA256: ${{ steps.inspect.outputs.inspection_sha256 }}
+        run: |
+          node --input-type=module <<'JS'
+          import {appendFile} from 'node:fs/promises';
+          import {loadInspection} from './tools/v02-actions/release-render.mjs';
+          const {inventory} = await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);
+          await appendFile(process.env.GITHUB_OUTPUT, `source=${inventory.source}\n`);
+          JS
+      - name: Verify the candidate's committed ontology
+        if: steps.inspect.outputs.skip == 'false'
+        uses: ./.github/actions/code-ontology
+        with:
+          source-commit: ${{ steps.candidate-source.outputs.source }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         id: upload
         if: steps.inspect.outputs.skip == 'false'

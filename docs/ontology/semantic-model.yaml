@@ -1,0 +1,317 @@
+{
+  "version": "0.2.0.dev0",
+  "name": "marmish",
+  "description": "Source files, lexical declarations and syntactic references in Marmish.",
+  "datasets": [
+    {
+      "name": "source_files",
+      "source": "marmish.main.source_files",
+      "description": "Tracked code, build inputs, tests and release configuration.",
+      "primary_key": [
+        "path"
+      ],
+      "fields": [
+        {
+          "name": "path",
+          "description": "Repository-relative path in the indexed Git tree.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "path"
+              }
+            ]
+          }
+        },
+        {
+          "name": "language",
+          "description": "Parser language or inventory category.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "language"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mode",
+          "description": "Git file mode in octal.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "mode"
+              }
+            ]
+          }
+        },
+        {
+          "name": "sha256",
+          "description": "SHA-256 fingerprint of the indexed file content.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "sha256"
+              }
+            ]
+          }
+        },
+        {
+          "name": "parse_status",
+          "description": "Structural parser result or inventory-only status.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "parse_status"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "symbols",
+      "source": "marmish.main.symbols",
+      "description": "Named declarations and their lexical containment.",
+      "primary_key": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "description": "Stable lexical declaration identifier.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "path",
+          "description": "File containing the declaration.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "path"
+              }
+            ]
+          }
+        },
+        {
+          "name": "parent_id",
+          "description": "Enclosing declaration, when present.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "parent_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kind",
+          "description": "Declaration kind reported by the parser.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "kind"
+              }
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "description": "Declaration name as written in the source.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "name"
+              }
+            ]
+          }
+        },
+        {
+          "name": "start_line",
+          "description": "First source line, starting at one.",
+          "datatype": "Integer",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "start_line"
+              }
+            ]
+          }
+        },
+        {
+          "name": "end_line",
+          "description": "Last source line, starting at one.",
+          "datatype": "Integer",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "end_line"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "code_references",
+      "source": "marmish.main.code_references",
+      "description": "Syntactic imports and calls with their source locations.",
+      "primary_key": [
+        "id"
+      ],
+      "fields": [
+        {
+          "name": "id",
+          "description": "Stable source reference identifier.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "path",
+          "description": "File containing the reference.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "path"
+              }
+            ]
+          }
+        },
+        {
+          "name": "scope_id",
+          "description": "Enclosing declaration, when present.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "scope_id"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kind",
+          "description": "Syntactic reference kind, such as import or call.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "kind"
+              }
+            ]
+          }
+        },
+        {
+          "name": "target",
+          "description": "Reference spelling recorded by the parser.",
+          "datatype": "String",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "target"
+              }
+            ]
+          }
+        },
+        {
+          "name": "line",
+          "description": "Source line, starting at one.",
+          "datatype": "Integer",
+          "expression": {
+            "dialects": [
+              {
+                "dialect": "ANSI_SQL",
+                "expression": "line"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "symbol_file",
+      "from": "symbols",
+      "to": "source_files",
+      "from_columns": [
+        "path"
+      ],
+      "to_columns": [
+        "path"
+      ]
+    },
+    {
+      "name": "symbol_parent",
+      "from": "symbols",
+      "to": "symbols",
+      "from_columns": [
+        "parent_id"
+      ],
+      "to_columns": [
+        "id"
+      ]
+    },
+    {
+      "name": "reference_file",
+      "from": "code_references",
+      "to": "source_files",
+      "from_columns": [
+        "path"
+      ],
+      "to_columns": [
+        "path"
+      ]
+    },
+    {
+      "name": "reference_scope",
+      "from": "code_references",
+      "to": "symbols",
+      "from_columns": [
+        "scope_id"
+      ],
+      "to_columns": [
+        "id"
+      ]
+    }
+  ]
+}

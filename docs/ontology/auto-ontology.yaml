@@ -1,0 +1,294 @@
+data_layer:
+  databases:
+  - id: edb60e2f-2ed6-59c5-9df0-987734a3e712
+    dialect: ''
+    schemas:
+    - id: 3b9d69f4-c817-53cd-8850-f28832e00cae
+      name: main
+      database_name: marmish
+      tables:
+      - id: a2366daa-8149-5f84-a270-8abe982bf750
+        name: code_references
+        description: Syntactic imports and calls with their source locations.
+        pk:
+        - id
+        type: ''
+        columns:
+        - id: 56230c2c-60ad-554b-9a60-edd7ea9e369d
+          name: path
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: b6a378bd-02c2-5cc8-8aa5-95ec290fc405
+          name: scope_id
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 41a87e2d-a2fe-5d63-97c2-73f707074295
+          name: id
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: false
+          is_unique: true
+        - id: c5d70234-6f69-578f-b406-9d1bd1b86985
+          name: kind
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: cbf71450-2209-5c40-b312-1bf6a8337ef5
+          name: target
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: feefae08-55db-5bfd-ac73-e21901710cbc
+          name: line
+          description: ''
+          type: BIGINT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+      - id: 02658f99-fc8e-5b8b-8ad5-7d4526ebe6d2
+        name: source_files
+        description: Tracked code, build inputs, tests and release configuration.
+        pk:
+        - path
+        type: ''
+        columns:
+        - id: dace9639-968f-517a-8b44-bc024e14bf85
+          name: path
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: false
+          is_unique: true
+        - id: 212b518e-cb31-5fbd-a7fa-2c51900c5dc4
+          name: language
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: b32c82fe-8378-5aab-a4a9-1c9298b913cc
+          name: mode
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 3c453664-1167-5635-b26b-2e3724182852
+          name: sha256
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: b50e20f1-4061-56a7-b2ec-2a0d54d98caa
+          name: parse_status
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+      - id: bb37163c-24e1-58a6-b4d3-911be03c7e99
+        name: symbols
+        description: Named declarations and their lexical containment.
+        pk:
+        - id
+        type: ''
+        columns:
+        - id: 1c4ec1ca-1107-5cac-91e3-795a4c4f9d3c
+          name: path
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 61b34bdc-6f6b-5daa-a423-ecf019f11f36
+          name: parent_id
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 4e3e8bec-8a0c-570b-8999-8742b44d71a1
+          name: id
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: false
+          is_unique: true
+        - id: 650607d2-0817-5e9e-9fb9-c3b4ccfce294
+          name: kind
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 5f7f94d8-3a66-550d-8e6c-9339bdf41b61
+          name: name
+          description: ''
+          type: TEXT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: dddfcc94-fe74-5435-afe6-e434b8d3a666
+          name: start_line
+          description: ''
+          type: BIGINT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+        - id: 41b2cbcd-ffb8-537e-be8f-9888c05b217b
+          name: end_line
+          description: ''
+          type: BIGINT
+          sample_values: []
+          is_nullable: true
+          is_unique: false
+  foreign_keys:
+  - source_column_id: 1c4ec1ca-1107-5cac-91e3-795a4c4f9d3c
+    target_column_id: dace9639-968f-517a-8b44-bc024e14bf85
+  - source_column_id: 61b34bdc-6f6b-5daa-a423-ecf019f11f36
+    target_column_id: 4e3e8bec-8a0c-570b-8999-8742b44d71a1
+  - source_column_id: 56230c2c-60ad-554b-9a60-edd7ea9e369d
+    target_column_id: dace9639-968f-517a-8b44-bc024e14bf85
+  - source_column_id: b6a378bd-02c2-5cc8-8aa5-95ec290fc405
+    target_column_id: 4e3e8bec-8a0c-570b-8999-8742b44d71a1
+  joins:
+  - source_table_id: bb37163c-24e1-58a6-b4d3-911be03c7e99
+    target_table_id: 02658f99-fc8e-5b8b-8ad5-7d4526ebe6d2
+    join_columns:
+    - source: path
+      target: path
+  - source_table_id: bb37163c-24e1-58a6-b4d3-911be03c7e99
+    target_table_id: bb37163c-24e1-58a6-b4d3-911be03c7e99
+    join_columns:
+    - source: parent_id
+      target: id
+  - source_table_id: a2366daa-8149-5f84-a270-8abe982bf750
+    target_table_id: 02658f99-fc8e-5b8b-8ad5-7d4526ebe6d2
+    join_columns:
+    - source: path
+      target: path
+  - source_table_id: a2366daa-8149-5f84-a270-8abe982bf750
+    target_table_id: bb37163c-24e1-58a6-b4d3-911be03c7e99
+    join_columns:
+    - source: scope_id
+      target: id
+semantic_layer:
+  terms:
+  - id: 94cdd9a1-5257-522e-83fb-295b424077d1
+    name: source_files
+    description: Tracked code, build inputs, tests and release configuration.
+    represents:
+    - 02658f99-fc8e-5b8b-8ad5-7d4526ebe6d2
+    columns_attributes:
+    - id: 1298a70f-8ef5-5327-ac85-9080382bdf26
+      name: path
+      description: Repository-relative path in the indexed Git tree.
+      column_id: dace9639-968f-517a-8b44-bc024e14bf85
+    - id: c8b9114f-08ae-59a1-97c6-0071ae76bd92
+      name: language
+      description: Parser language or inventory category.
+      column_id: 212b518e-cb31-5fbd-a7fa-2c51900c5dc4
+    - id: e7c6cc99-db2b-5fda-ad9a-905bf5707045
+      name: mode
+      description: Git file mode in octal.
+      column_id: b32c82fe-8378-5aab-a4a9-1c9298b913cc
+    - id: e9d08b0b-46f9-5d6b-88d0-5875f8e20592
+      name: sha256
+      description: SHA-256 fingerprint of the indexed file content.
+      column_id: 3c453664-1167-5635-b26b-2e3724182852
+    - id: 6077da3f-82aa-5a6c-9b3a-08c8d4c968ea
+      name: parse_status
+      description: Structural parser result or inventory-only status.
+      column_id: b50e20f1-4061-56a7-b2ec-2a0d54d98caa
+  - id: e009acfd-dbfa-5f4c-813a-44a07f2567a0
+    name: symbols
+    description: Named declarations and their lexical containment.
+    represents:
+    - bb37163c-24e1-58a6-b4d3-911be03c7e99
+    columns_attributes:
+    - id: 880cc406-8ac0-557f-95ee-1ca64062a593
+      name: id
+      description: Stable lexical declaration identifier.
+      column_id: 4e3e8bec-8a0c-570b-8999-8742b44d71a1
+    - id: 817c86dd-7c79-5a7f-b07c-e60faa4c608e
+      name: path
+      description: File containing the declaration.
+      column_id: 1c4ec1ca-1107-5cac-91e3-795a4c4f9d3c
+    - id: c5d5ef15-3aa2-5aca-87f8-c18910f80ab2
+      name: parent_id
+      description: Enclosing declaration, when present.
+      column_id: 61b34bdc-6f6b-5daa-a423-ecf019f11f36
+    - id: a2346793-bdf7-56f7-92e9-18e11f6fbb1a
+      name: kind
+      description: Declaration kind reported by the parser.
+      column_id: 650607d2-0817-5e9e-9fb9-c3b4ccfce294
+    - id: 79ef3b2c-d5c5-521a-85bb-8c4d70c42c93
+      name: name
+      description: Declaration name as written in the source.
+      column_id: 5f7f94d8-3a66-550d-8e6c-9339bdf41b61
+    - id: 9ad9524d-7b91-5dcd-888f-00b7cfad6668
+      name: start_line
+      description: First source line, starting at one.
+      column_id: dddfcc94-fe74-5435-afe6-e434b8d3a666
+    - id: 7657bec8-ab3e-5656-88de-1a37cec45675
+      name: end_line
+      description: Last source line, starting at one.
+      column_id: 41b2cbcd-ffb8-537e-be8f-9888c05b217b
+  - id: d7b9aed5-9a65-554d-a8e2-74088986a1ec
+    name: code_references
+    description: Syntactic imports and calls with their source locations.
+    represents:
+    - a2366daa-8149-5f84-a270-8abe982bf750
+    columns_attributes:
+    - id: 10020f4d-8800-58de-bb75-88b61dc5ebfa
+      name: id
+      description: Stable source reference identifier.
+      column_id: 41a87e2d-a2fe-5d63-97c2-73f707074295
+    - id: 749b9908-7e1a-5d9a-b04d-84b7aabda134
+      name: path
+      description: File containing the reference.
+      column_id: 56230c2c-60ad-554b-9a60-edd7ea9e369d
+    - id: 7c44b138-72e5-5f57-8356-db818972da88
+      name: scope_id
+      description: Enclosing declaration, when present.
+      column_id: b6a378bd-02c2-5cc8-8aa5-95ec290fc405
+    - id: 63cd12db-9c9a-5aea-ade8-f8720fee3254
+      name: kind
+      description: Syntactic reference kind, such as import or call.
+      column_id: c5d70234-6f69-578f-b406-9d1bd1b86985
+    - id: 5a0ee603-db5a-5581-b597-9eb603660020
+      name: target
+      description: Reference spelling recorded by the parser.
+      column_id: cbf71450-2209-5c40-b312-1bf6a8337ef5
+    - id: 211c5390-5acf-524f-8141-84b3a704c005
+      name: line
+      description: Source line, starting at one.
+      column_id: feefae08-55db-5bfd-ac73-e21901710cbc
+  semantic_fks:
+  - column_attribute_id: 1298a70f-8ef5-5327-ac85-9080382bdf26
+    column_id: 1c4ec1ca-1107-5cac-91e3-795a4c4f9d3c
+  - column_attribute_id: 880cc406-8ac0-557f-95ee-1ca64062a593
+    column_id: 61b34bdc-6f6b-5daa-a423-ecf019f11f36
+  - column_attribute_id: 1298a70f-8ef5-5327-ac85-9080382bdf26
+    column_id: 56230c2c-60ad-554b-9a60-edd7ea9e369d
+  - column_attribute_id: 880cc406-8ac0-557f-95ee-1ca64062a593
+    column_id: b6a378bd-02c2-5cc8-8aa5-95ec290fc405
+  sql_attributes:
+    manual: []
+    table: []
+    sql: []
+    bridge_table: []
+  custom_analyses: []
+zones: []

@@ -8,10 +8,14 @@ from test_marmish_managed_workflow import step_blocks as steps
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {}  # Test-owned overrides; mutations never write workflow files.
+ONTOLOGY_ACTION = './.github/actions/code-ontology'
 
 
 def source(name):
-    return SOURCES[name] if name in SOURCES else (ROOT / '.github/workflows' / name).read_text()
+    if name in SOURCES:
+        return SOURCES[name]
+    path = '.github/actions/code-ontology/action.yml' if name == 'code-ontology-action.yml' else '.github/workflows/' + name
+    return (ROOT / path).read_text()
 
 
 def block(text, header):
@@ -80,7 +84,9 @@ class ReleaseAutomation(unittest.TestCase):
     def test_pinned_actions_no_write_job_dependency_or_candidate_execution(self):
         identities = {
             'inspect': ['uses: actions/checkout@', 'name: Install locked read-only archive tooling',
-                        'name: Inspect completed candidate without executing artifacts', 'uses: actions/upload-artifact@'],
+                        'name: Inspect completed candidate without executing artifacts',
+                        'name: Read the verified candidate source commit', "name: Verify the candidate's committed ontology",
+                        'uses: actions/upload-artifact@'],
             'reproduce-bootstrap': ['name: Fetch trusted publisher orchestration without credentials',
                 'uses: actions/download-artifact@', 'name: Reproduce bootstrap with credential-free child environment',
                 'uses: actions/upload-artifact@'],
@@ -101,7 +107,8 @@ class ReleaseAutomation(unittest.TestCase):
                     self.assertEqual(first, expected)
                 actions = re.findall(r'^(?:uses:|        uses:) (.*)$', step, re.M)
                 for action in actions:
-                    self.assertRegex(action, r'@[0-9a-f]{40}$')
+                    if action != ONTOLOGY_ACTION or name != 'inspect':
+                        self.assertRegex(action, r'@[0-9a-f]{40}$')
                 self.assertNotIn('${{', run_text(step))
         commands = '\n'.join(run_text(step) for step in steps(self.jobs['publish']))
         self.assertNotRegex(commands, r'\b(npm|cargo|python|curl|rad)\b')
@@ -129,6 +136,102 @@ class ReleaseAutomation(unittest.TestCase):
         self.assertEqual(fields(package, 4)['needs'], 'release-eligibility')
         self.assertIn("== 'build'", fields(package, 4)['if'])
         self.assertIn('release-eligibility', fields(block(text, 'jobs:'), 2))
+
+    def assert_ontology_action(self, step, commit, condition=None):
+        options = fields('        ' + step, 8)
+        uses = options.get('uses')
+        self.assertEqual(uses, ONTOLOGY_ACTION)
+        self.assertEqual(options.get('if'), condition)
+        self.assertNotIn('continue-on-error', options)
+        self.assertEqual(fields(block(step, '        with:'), 10), {'source-commit': commit})
+
+    def assert_trusted_checkout(self, step, history=False):
+        self.assertRegex(step.splitlines()[0], r'^uses: actions/checkout@[0-9a-f]{40}$')
+        options = {'ref': '${{ github.sha }}', 'persist-credentials': 'false'}
+        if history:
+            options['fetch-depth'] = '0'
+        self.assertEqual(fields(block(step, '        with:'), 10), options)
+
+    def test_ontology_gates_candidate_and_publication_from_trusted_checkout(self):
+        eligibility = block(block(source('v02-release.yml'), 'jobs:'), '  release-eligibility:')
+        candidate_steps = steps(eligibility)
+        self.assert_trusted_checkout(candidate_steps[0], history=True)
+        self.assert_ontology_action(candidate_steps[1], '${{ inputs.source_commit || github.sha }}')
+        self.assertIn('node tools/v02-actions/eligibility.mjs', run_text(candidate_steps[3]))
+        self.assertNotIn('continue-on-error', fields(eligibility, 4))
+
+        checkout, _, inspect, read_source, ontology, upload = steps(self.jobs['inspect'])
+        self.assert_trusted_checkout(checkout, history=True)
+        self.assertEqual(fields(inspect, 8)['id'], 'inspect')
+        active = "steps.inspect.outputs.skip == 'false'"
+        self.assertEqual(fields(read_source, 8)['if'], active)
+        self.assertEqual(fields(read_source, 8)['id'], 'candidate-source')
+        self.assertNotIn('continue-on-error', fields(read_source, 8))
+        self.assertEqual(fields(block(read_source, '        env:'), 10), {
+            'INSPECTION_ROOT': '${{ runner.temp }}/publish-inputs',
+            'INSPECTION_SHA256': '${{ steps.inspect.outputs.inspection_sha256 }}',
+        })
+        self.assertIn("import {loadInspection} from './tools/v02-actions/release-render.mjs';", run_text(read_source))
+        self.assertIn('await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);', run_text(read_source))
+        self.assertIn('source=${inventory.source}', run_text(read_source))
+        self.assert_ontology_action(ontology, '${{ steps.candidate-source.outputs.source }}', active)
+        self.assertEqual(fields(upload, 8)['if'], active)
+        self.assertNotIn('continue-on-error', fields(self.jobs['inspect'], 4))
+        self.assertEqual(fields(self.jobs['publish'], 4)['needs'], '[inspect, reproduce-bootstrap, verify]')
+
+    def test_ontology_gates_legacy_build_before_any_matrix_and_binds_sha(self):
+        text = source('release.yml')
+        jobs = block(text, 'jobs:')
+        gate = block(jobs, '  ontology:')
+        self.assertEqual(fields(block(text, 'permissions:'), 2), {'contents': 'read'})
+        self.assertEqual(fields(gate, 4), {
+            'if': "github.ref == 'refs/heads/master'", 'runs-on': 'ubuntu-24.04',
+            'timeout-minutes': '5', 'steps': '',
+        })
+        checkout, ontology = steps(gate)
+        self.assert_trusted_checkout(checkout, history=True)
+        self.assert_ontology_action(ontology, '${{ github.sha }}')
+        self.assertEqual(fields(block(jobs, '  build:'), 4)['needs'], 'ontology')
+        self.assertEqual(fields(block(jobs, '  publish:'), 4)['needs'], 'build')
+        for job in ('build', 'publish'):
+            self.assert_trusted_checkout(steps(block(jobs, '  ' + job + ':'))[0])
+
+    def test_ontology_pr_has_read_only_disposable_runner_and_no_paths_filter(self):
+        text = source('code-ontology.yml')
+        self.assertEqual(fields(block(text, 'permissions:'), 2), {'contents': 'read'})
+        event = block(text, 'on:')
+        self.assertEqual(fields(event, 2), {'pull_request': '', 'merge_group': '', 'push': ''})
+        self.assertEqual(fields(block(event, '  merge_group:'), 4), {'types': '[checks_requested]'})
+        self.assertEqual(fields(block(event, '  push:'), 4), {'branches': '[master]', 'tags': "['v*']"})
+        self.assertNotIn('paths', event)
+        jobs = block(text, 'jobs:')
+        self.assertEqual(fields(jobs, 2), {'freshness': ''})
+        job = block(jobs, '  freshness:')
+        self.assertEqual(fields(job, 4), {'name': 'Ontology freshness', 'runs-on': 'ubuntu-24.04',
+                                          'timeout-minutes': '5', 'steps': ''})
+        checkout, resolve, ontology, validation = steps(job)
+        self.assert_trusted_checkout(checkout, history=True)
+        self.assertEqual(fields(validation, 8)['run'], 'sh tools/code-ontology/test.sh')
+        self.assertNotIn('continue-on-error', fields(validation, 8))
+        self.assertIn('git rev-parse --verify "$GITHUB_SHA^{commit}"', run_text(resolve))
+        self.assertIn('test "$source_commit" = "$(git rev-parse HEAD)"', run_text(resolve))
+        self.assert_ontology_action(ontology, '${{ steps.source.outputs.source }}')
+        self.assertNotIn('github.token', text)
+        self.assertNotIn('${{', run_text(resolve))
+
+    def test_ontology_composite_pins_tools_and_checks_exact_sha(self):
+        text = source('code-ontology-action.yml')
+        self.assertEqual(re.findall(r'(?m)^    - uses: (.+)$', text), [
+            'astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0',
+        ])
+        self.assertIn('version: 0.11.16\n        require-checksums: true\n        enable-cache: false', text)
+        self.assertIn('SOURCE_COMMIT: ${{ inputs.source-commit }}', text)
+        command = block(text, '      run: |')
+        self.assertNotIn('${{', command)
+        self.assertIn('[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]', command)
+        self.assertIn('test "$(git rev-parse --verify "$SOURCE_COMMIT^{commit}")" = "$SOURCE_COMMIT"', command)
+        self.assertIn('uv run --locked --python 3.12 --project tools/code-ontology python tools/code-ontology/index.py check --ref "$SOURCE_COMMIT"', command)
+        self.assertNotIn('continue-on-error', text)
 
     def test_split_candidate_dependencies_and_bounded_runners(self):
         text = source('v02-release.yml')
@@ -328,6 +431,26 @@ class MutationTests(unittest.TestCase):
                               ('${{ inputs.source_commit || github.sha }}', '${{ inputs.source_commit }}')]:
             with self.subTest(before=before):
                 self.check_source('v02-release.yml', before, after)
+
+    def test_ontology_security_mutations(self):
+        for name, before, after in [
+            ('code-ontology.yml', 'pull_request:', 'pull_request_target:'),
+            ('code-ontology.yml', 'runs-on: ubuntu-24.04', 'runs-on: self-hosted'),
+            ('code-ontology.yml', 'contents: read', 'contents: write'),
+            ('code-ontology.yml', 'branches: [master]', 'branches: [master]\n    paths: [crates]'),
+            ('code-ontology-action.yml', 'enable-cache: false', 'enable-cache: true'),
+            ('code-ontology-action.yml', 'check --ref "$SOURCE_COMMIT"', 'check --ref HEAD'),
+            ('v02-release.yml', 'ref: ${{ github.sha }}', 'ref: ${{ inputs.source_commit || github.sha }}'),
+            ('v02-release.yml', '      - uses: ./.github/actions/code-ontology\n        with:\n',
+             '      - uses: ./.github/actions/code-ontology\n        if: false\n        with:\n'),
+            ('v02-publish.yml', 'source-commit: ${{ steps.candidate-source.outputs.source }}',
+             'source-commit: ${{ github.sha }}'),
+            ('v02-publish.yml', "        if: steps.inspect.outputs.skip == 'false'\n        uses: ./.github/actions/code-ontology",
+             '        if: false\n        uses: ./.github/actions/code-ontology'),
+            ('release.yml', 'needs: ontology', 'needs: []'),
+        ]:
+            with self.subTest(name=name, before=before):
+                self.check_source(name, before, after)
 
     def test_split_and_cache_security_mutations(self):
         for before, after in [
