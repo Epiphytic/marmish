@@ -134,7 +134,7 @@
 {"path":"crates/marmish-native/src/foundation_check.rs","language":"rust","mode":"100644","sha256":"f131ad663f96e174ff2f93818a68f388757cf0e60a14093f80e1953c7d4fd5d8","parse_status":"parsed"}
 {"path":"crates/marmish-native/src/identity.rs","language":"rust","mode":"100644","sha256":"0f8d1e4bcc9865ada76cc757b8bddcbc3a15397f0075c57d0eb6bd967b2a349d","parse_status":"recovered"}
 {"path":"crates/marmish-native/src/installed_autoexit.rs","language":"rust","mode":"100644","sha256":"8d798d9bf8435ae4625e14f3c72ae20b7df263da22414f9f84474a1b07cbacf9","parse_status":"recovered"}
-{"path":"crates/marmish-native/src/installed_benchmark.rs","language":"rust","mode":"100644","sha256":"fa0605a9d05a361bd0ec138f64a5c94dcad42f29a0862e15b4238a0b1b49acda","parse_status":"parsed"}
+{"path":"crates/marmish-native/src/installed_benchmark.rs","language":"rust","mode":"100644","sha256":"b2322891282702d20007e7bed728419bed5e8caca49f49ef755e0a1fbb453af1","parse_status":"parsed"}
 {"path":"crates/marmish-native/src/installed_check.rs","language":"rust","mode":"100644","sha256":"78c46e7356315810b12bc754d35eab59cb4173debb8060f7080282b85021d11d","parse_status":"parsed"}
 {"path":"crates/marmish-native/src/installed_cleanup.rs","language":"rust","mode":"100644","sha256":"03a733dd0cf3c0a7ff1f97cbe4b1c4a12ec1adce6d91b8475cc8bfb7ac73adac","parse_status":"parsed"}
 {"path":"crates/marmish-native/src/installed_copy_checkpoint.rs","language":"rust","mode":"100644","sha256":"79277a113e10239c6e9809d9aed45d39e91a1025eca49c684328a616a7e8c9be","parse_status":"parsed"}

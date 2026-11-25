@@ -533,7 +533,6 @@ struct RunState {
     runtime: Runtime,
     expected: BTreeMap<(String, String), (String, String)>,
     cleanup_deadline: Instant,
-    sockets: Option<PathBuf>,
     stage: Failure,
 }
 struct Client<'a> {
@@ -795,20 +794,18 @@ async fn work(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         _ => return Err(bad()),
     }
-    let mut random = [0; 8];
-    getrandom::fill(&mut random).map_err(|_| Error::Identity("random"))?;
-    let directory = std::env::temp_dir()
-        .canonicalize()?
-        .join(format!("mb-{}", hex::encode(random)));
-    fs::DirBuilder::new().mode(0o700).create(&directory)?;
-    state.sockets = Some(directory.clone());
+    let server_socket = super::autoexit::socket(workspace, "server", &environment)?;
+    let client_socket = super::autoexit::socket(workspace, "client", &environment)?;
+    if server_socket == client_socket {
+        return Err(Error::Invalid("installed_socket_collision"));
+    }
     let (ready_deadline, work_deadline, cleanup_deadline) = deadlines(Instant::now());
     state.cleanup_deadline = cleanup_deadline;
     state.stage = Failure::Activation;
     state.runtime.server = Some(Daemon::start(
         workspace,
         "server",
-        directory.join("s"),
+        server_socket,
         &environment,
         &ctx.relays,
         1800,
@@ -817,7 +814,7 @@ async fn work(
     state.runtime.client = Some(Daemon::start(
         workspace,
         "client",
-        directory.join("c"),
+        client_socket.clone(),
         &environment,
         &ctx.relays,
         1800,
@@ -856,7 +853,6 @@ async fn work(
         _ = signal.recv() => return Err(Error::Invalid("installed_interrupted")),
         result = activation => result?,
     }
-    let client_socket = directory.join("c");
     let client = Client {
         workspace,
         context: ctx,
@@ -899,7 +895,6 @@ pub(super) async fn run(ctx: &Context, workspace: &Path, output: &Path) -> Resul
         runtime: Runtime::default(),
         expected: BTreeMap::new(),
         cleanup_deadline: Instant::now(),
-        sockets: None,
         stage: Failure::Preparation,
     };
     let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -934,9 +929,6 @@ pub(super) async fn run(ctx: &Context, workspace: &Path, output: &Path) -> Resul
         } else {
             Failure::Cleanup
         });
-    }
-    if let Some(directory) = state.sockets {
-        let _ = fs::remove_dir(directory);
     }
     records::write(output, &result)?;
     if result.complete {
