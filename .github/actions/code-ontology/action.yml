@@ -1,0 +1,23 @@
+name: Verify the checked-in code ontology
+description: Use the checked-out tools to check an immutable Marmish commit
+inputs:
+  source-commit:
+    description: Full lowercase commit SHA in the checkout
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+      with:
+        version: 0.11.16
+        require-checksums: true
+        enable-cache: false
+    - name: Compare the ontology with the selected Git tree
+      shell: bash
+      env:
+        SOURCE_COMMIT: ${{ inputs.source-commit }}
+      run: |
+        set -euo pipefail
+        [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+        test "$(git rev-parse --verify "$SOURCE_COMMIT^{commit}")" = "$SOURCE_COMMIT"
+        uv run --locked --python 3.12 --project tools/code-ontology python tools/code-ontology/index.py check --ref "$SOURCE_COMMIT"

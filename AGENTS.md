@@ -110,3 +110,14 @@ decision or a known limit. Distinguish implemented and tested behavior from
 intent. Link concrete evidence instead of inferring support from an API name or
 fresh encryption keys. Beads remains the task tracker; the specification is the
 behavioral and architectural handoff, not a second queue.
+
+## Code ontology freshness
+
+Any commit that changes tracked code, tests, scripts, dependencies, build or
+packaging configuration, workflows, or release versions must contain the
+matching regenerated [code ontology](docs/ontology/README.md). Stage the
+intended changes, run the ontology update, stage its outputs, and run the
+check on the final staged tree. Regenerate after any further input change.
+A failing check blocks pushing, tagging, and publishing that revision.
+Release operators must also verify the exact source revision they package
+or publish. The generation tool and graph are development tooling.

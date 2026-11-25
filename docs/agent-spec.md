@@ -1349,3 +1349,13 @@ The later exact-A candidate failed the separate macOS cleanup race described
 above. G's and R's legacy results cannot substitute for fresh native/release
 qualification of a corrected source. No native gate is waived, and no operation
 benchmark or release qualification result is claimed here.
+
+## Code ontology
+
+The [code ontology](ontology/README.md) maps tracked source and release
+inputs to declarations, lexical containment, and syntactic references.
+It provides a SQLite graph and a model for NVIDIA Auto Ontology. The
+repository checks freshness on the exact staged or committed Git tree.
+Release workflows validate the candidate source before builds and
+publication. See the [phase design](phases/code-ontology.md) for coverage,
+parser limits, and the installer cutover boundary.
