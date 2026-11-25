@@ -32,7 +32,7 @@ function fixture(version = '0.2.3') {
     bootstrap_sha256: inventoryDigest(bootstrap), reports: releaseReportNames(version, {run_id:'101',run_attempt:'1'}).map(name => ({name,sha256:'e'.repeat(64)}))};
   const inventoryBytes = canonicalInventory(inventory), hash = inventoryDigest(inventoryBytes);
   const proof = `Marmish-Publication: ${JSON.stringify({schema: 1, source, version, run_id: '101', run_attempt: '1', inventory_sha256: hash})}`;
-  const state = {master: source, tag: null, release: null, assets: [], drafts: [], tags: [], writes: [], uploads: [], snapshots: [], hook: () => {}};
+  const state = {master: source, tag: null, release: null, assets: [], drafts: [], tags: [], rulesets: [], writes: [], uploads: [], snapshots: [], hook: () => {}};
   const notFound = () => { const e = new Error('not_found'); e.status = 404; throw e; };
   const asset = pin => ({id: inventory.assets.indexOf(pin) + 1, name: pin.name, state: 'uploaded', size: pin.size,
     digest: `sha256:${pin.sha256}`, browser_download_url: `https://github.com/Epiphytic/marmish/releases/download/v${version}/${pin.name}`});
@@ -47,7 +47,7 @@ function fixture(version = '0.2.3') {
     if (r.startsWith('/actions/artifacts/')) { const pin = inventory.artifacts.find(a => String(a.id) === r.split('/').at(-1));
       return {...pin, expired: false, workflow_run: {id: 101, head_sha: source}}; }
     if (r === '/branches/master') return {protected: false};
-    if (r === '/rulesets') return [];
+    if (r === '/rulesets') return state.rulesets;
     if (r === '/tags') return state.tags;
     if (r === '/git/ref/heads/master') return {object: {type: 'commit', sha: state.master}};
     if (r === `/git/ref/tags/v${version}`) return state.tag ? {object: {type: 'tag', sha: tagObject}} : notFound();
@@ -78,7 +78,7 @@ function fixture(version = '0.2.3') {
     downloadPublic: async url => url.includes('raw.githubusercontent.com') ? bootstrap : Buffer.from(decodeURIComponent(url.split('/').at(-1))),
     writeState: async value => state.snapshots.push(value)};
   const input = {inventoryBytes, inventorySha256: hash, payloadRoot: '/payload', bootstrapPath: '/bootstrap.sh', publisherSha: source};
-  const seed = () => { state.tag = source; state.release = {id: 20, tag_name: `v${version}`, prerelease: true, draft: true, body: proof}; };
+  const seed = (prerelease = true) => { state.tag = source; state.release = {id: 20, tag_name: `v${version}`, prerelease, draft: true, body: proof}; };
   return {inventory, input, adapters, state, seed, asset, source, bootstrapCommit};
 }
 test('publishes exact fifteen immutable assets and script-only direct-child bootstrap', async () => {
@@ -139,11 +139,32 @@ test('master race before tag and before release publication stops mutation', asy
   assert.equal(g.state.release.draft, true); assert.equal(g.state.writes.some(w => w.route === '/releases/20'), false);
 });
 test('protection or newer native tag prevents release creation', async () => {
-  const f = fixture(), api = f.adapters.api;
-  f.adapters.api = async (...args) => args[0].endsWith('/branches/master') ? {protected: true} : api(...args);
-  await assert.rejects(publishRelease(f.input, f.adapters), /master_protected/); assert.deepEqual(f.state.writes, []);
+  for (const branch of [{protected: true}, {protected: 'false'}, {}, null]) {
+    const f = fixture(), api = f.adapters.api;
+    f.adapters.api = async (...args) => args[0].endsWith('/branches/master') ? branch : api(...args);
+    await assert.rejects(publishRelease(f.input, f.adapters), /master_protected/);
+    assert.deepEqual(f.state.writes, []);
+  }
   const g = fixture(); g.state.tags = [{name: 'v0.2.10-rc.1'}];
   await assert.rejects(publishRelease(g.input, g.adapters), /newer_tag/); assert.deepEqual(g.state.writes, []);
+});
+test('only disabled rulesets with valid identities permit publication', async () => {
+  const disabled = {id: 27969212, target: 'branch', enforcement: 'disabled'};
+  const allowed = fixture('0.3.1');
+  allowed.state.rulesets = [disabled];
+  assert.equal((await publishRelease(allowed.input, allowed.adapters)).publication_state, 'complete');
+
+  for (const rule of [
+    {...disabled, enforcement: 'active'}, {...disabled, enforcement: 'evaluate'},
+    {...disabled, enforcement: 'unknown'}, {...disabled, enforcement: null},
+    {...disabled, id: '27969212'}, {...disabled, id: 0}, {id: disabled.id}, null,
+  ]) {
+    const f = fixture('0.3.1');
+    f.state.rulesets = [disabled, rule];
+    await assert.rejects(publishRelease(f.input, f.adapters), /master_rulesets_changed/);
+    assert.deepEqual(f.state.writes, []);
+    assert.deepEqual(f.state.uploads, []);
+  }
 });
 test('REST adapter bounds GET retries, never retries uncertain writes, and omits auth publicly', async () => {
   let count = 0; const calls = [];
@@ -306,23 +327,65 @@ test('large binary uploads and downloads get ten bounded minutes; API JSON stays
   assert.equal(transferDeadlineMs({limit: 1024 * 1024}), 60000);
 });
 
-test('0.3 publication preserves guards and static qualification disclosures',async()=>{
-  for(const version of ['0.3.0','0.3.1']) {
-    const f=fixture(version);await publishRelease(f.input,f.adapters);
-    assert.equal(f.state.release.tag_name,`v${version}`);
-    const uploads=f.state.uploads.length;await publishRelease({...f.input,publisherSha:f.bootstrapCommit},f.adapters);assert.equal(f.state.uploads.length,uploads);
-    assert.equal(f.state.release.prerelease,true);assert.equal(f.state.release.make_latest,'false');
-    for(const required of ['stdin/stdout/stderr','rsync','transfer-ID resume','zlib','cancellation',
-      'Disconnect does not cancel','exactly matching peer versions','directory confinement','glibc 2.39','macOS 15',
-      'ad-hoc signed, not notarized','Keychain','Tor','checks gate publication on all three platforms',
-      'Streaming qualification is run separately against these exact binaries',
-      'historical macOS first-TERM cleanup failure remains unexplained','diagnostics do not establish a fix',
-      '3e93fa4 carrying 0.2.3','not these release binaries','marmish install --select 0.2.3','old binaries reject 0.3'])
-      assert.ok(f.state.release.body.includes(required),required);
-    for(const stale of ['copy-edge journal assertion failed','two interruption cohorts were not dispatched',
-      'Full streaming qualification has not passed','marmish install --select 0.3.0'])
-      assert.equal(f.state.release.body.includes(stale),false,stale);
+test('stable releases become latest while older releases and RCs stay prereleases', async () => {
+  for (const [version, prerelease] of [
+    ['0.2.3', true], ['0.3.0', true], ['0.3.1-rc.2', true], ['0.3.1', false], ['0.3.2', false],
+  ]) {
+    const f = fixture(version);
+    await publishRelease(f.input, f.adapters);
+    const draft = f.state.writes.find(w => w.route === '/releases').body;
+    assert.equal(draft.tag_name, `v${version}`);
+    assert.equal(draft.draft, true);
+    assert.equal(draft.prerelease, prerelease);
+    assert.equal(draft.make_latest, 'false');
+    assert.deepEqual(f.state.writes.find(w => w.route === '/releases/20').body,
+      {draft: false, prerelease, make_latest: prerelease ? 'false' : 'true'});
+
+    assert.equal(f.state.uploads.length, 15);
+    f.state.uploads = [];
+    f.state.writes = [];
+    assert.equal((await publishRelease({...f.input, publisherSha: f.bootstrapCommit}, f.adapters)).publication_state, 'complete');
+    assert.deepEqual(f.state.uploads, []);
+    assert.deepEqual(f.state.writes, []);
   }
+});
+test('a matching stable draft resumes and releases with mismatched metadata are refused', async () => {
+  const f = fixture('0.3.1');
+  f.seed(false);
+  f.state.assets.push(f.asset(f.inventory.assets[0]));
+  await publishRelease(f.input, f.adapters);
+  assert.equal(f.state.uploads.length, 14);
+  assert.equal(f.state.writes.some(w => w.route === '/releases'), false);
+  assert.deepEqual(f.state.writes.find(w => w.route === '/releases/20').body,
+    {draft: false, prerelease: false, make_latest: 'true'});
+
+  for (const [version, prerelease, draft] of [
+    ['0.3.1', true, true], ['0.3.1', true, false],
+    ['0.3.1-rc.1', false, true], ['0.3.0', false, false],
+    ['0.3.1', false, undefined], ['0.3.1', 'false', true],
+  ]) {
+    const conflict = fixture(version);
+    conflict.seed(prerelease);
+    conflict.state.release.draft = draft;
+    await assert.rejects(publishRelease(conflict.input, conflict.adapters),
+      draft ? /draft_version_conflict/ : /release_version_conflict/);
+    assert.deepEqual(conflict.state.writes, []);
+    assert.deepEqual(conflict.state.uploads, []);
+  }
+});
+test('release notes describe the qualification and retain historical and platform caveats', async () => {
+  const f = fixture('0.3.1');
+  await publishRelease(f.input, f.adapters);
+  for (const required of [
+    'stdin/stdout/stderr', 'rsync', 'transfer-ID resume', 'zlib', 'cancellation',
+    'Commands continue after disconnect', 'exactly matching peer versions', 'Directory access follows operating system permissions',
+    'glibc 2.39', 'macOS 15', 'ad-hoc signed', 'lack notarization', 'Keychain', 'Tor',
+    'checks gate publication on all three platforms', 'Eight installed streaming and transfer test cohorts',
+    'finite command benchmark', 'these exact binaries', 'pinned installer with local candidate assets',
+    'Public HTTPS installation is a separate post-publication check',
+    'historical macOS first-TERM cleanup failure remains unexplained', 'adds diagnostics for investigation',
+    '3e93fa4 carrying 0.2.3', 'marmish install --select 0.2.3', 'Old binaries reject 0.3',
+  ]) assert.ok(f.state.release.body.includes(required), required);
 });
 test('publisher authority rejects cross-minor newer or equal drafts and malformed native tags before writes',async()=>{
   for(const [version,tag] of [['0.2.3','v0.3.0'],['0.3.0','v0.3.0'],['0.3.0','v0.3.1'],['0.3.0','v0.3.01'],['0.3.0','v0.3.bad']]) {

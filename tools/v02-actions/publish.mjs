@@ -3,7 +3,7 @@ import {inflateRawSync} from 'node:zlib';
 import {constants, promises as fs} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
-import {REPOSITORY, HEX40, HEX64, NATIVE_TAG, validVersion, compareVersions, MAX_ASSET, inventoryDigest, parseInventory,
+import {REPOSITORY, HEX40, HEX64, NATIVE_TAG, validVersion, parseVersion, compareVersions, MAX_ASSET, inventoryDigest, parseInventory,
   parsePublicationInputs, requireRelease as need} from './release-schema.mjs';
 
 const nativeTag = NATIVE_TAG;
@@ -44,10 +44,10 @@ function marker(inventory, hash) {
   return `Marmish-Publication: ${JSON.stringify({schema: 1, source: inventory.source, version: inventory.version,
     run_id: inventory.candidate.run_id, run_attempt: inventory.candidate.run_attempt, inventory_sha256: hash})}`;
 }
-function matchingRelease(release, tag, proof) {
-  return release.tag_name === tag && typeof release.body === 'string'
+function matchingRelease(release, tag, proof, prerelease) {
+  return release.tag_name === tag && typeof release.body === 'string' && typeof release.draft === 'boolean'
     && release.body.split('\n').filter(line => line.startsWith('Marmish-Publication: ')).length === 1
-    && release.body.split('\n').includes(proof) && release.prerelease === true;
+    && release.body.split('\n').includes(proof) && release.prerelease === prerelease;
 }
 async function tagTarget(api, base, tag, proof) {
   const ref = await optional(api, `${base}/git/ref/tags/${encodeURIComponent(tag)}`);
@@ -65,9 +65,10 @@ async function unchangedMaster(api, base, source) {
 }
 async function checkProtection(api, base) {
   const branch = await api(`${base}/branches/master`);
-  need(branch.protected === false, 'master_protected');
+  need(branch?.protected === false, 'master_protected');
   const rules = await pages(api, `${base}/rulesets`);
-  need(rules.length === 0, 'master_rulesets_changed');
+  need(rules.every(rule => Number.isSafeInteger(rule?.id) && rule.id > 0 && rule.enforcement === 'disabled'),
+    'master_rulesets_changed');
 }
 async function verifyCandidate(api, base, inventory) {
   const c = inventory.candidate;
@@ -296,13 +297,15 @@ export async function publishRelease(input, adapters) {
   const priorBootstrap = await completedBootstrap(api, base, inventory, bootstrap);
   need(input.publisherSha === (priorBootstrap ?? inventory.source), 'publisher_not_source');
   const tag = state.tag, proof = marker(inventory, input.inventorySha256);
+  // Releases before the rollout were published as prereleases, even with stable versions.
+  const prerelease = parseVersion(inventory.version).rc !== null || compareVersions(inventory.version, '0.3.1') < 0;
   const releases = await pages(api, `${base}/releases`);
   const selected = releases.filter(r => r.tag_name === tag);
   need(selected.length <= 1, 'duplicate_release');
   for (const r of releases) {
     if (!nativeTag.test(r.tag_name ?? '')) continue;
     const comparison = compareTags(r.tag_name, tag);
-    need(comparison < 0 || (comparison === 0 && matchingRelease(r, tag, proof)), r.draft ? 'draft_version_conflict' : 'release_version_conflict');
+    need(comparison < 0 || (comparison === 0 && matchingRelease(r, tag, proof, prerelease)), r.draft ? 'draft_version_conflict' : 'release_version_conflict');
   }
   const tags = await pages(api, `${base}/tags`);
   need(tags.every(t => !nativeTag.test(t.name ?? '') || compareTags(t.name, tag) <= 0), 'newer_tag_exists');
@@ -327,10 +330,18 @@ export async function publishRelease(input, adapters) {
     phase = 'draft';
     await unchangedMaster(api, base, inventory.source);
     need(await tagTarget(api, base, tag, proof) === inventory.source, 'tag_source_conflict');
+    const notes = [
+      'Rust streaming release with streaming stdin/stdout/stderr, native file put/get with transfer-ID resume, rsync remote-shell support, streaming zlib compression and explicit cancellation.',
+      'Commands continue after disconnect. Copy requires exactly matching peer versions. Upgrade both peers together. Executable policies restrict which programs can run. Directory access follows operating system permissions.',
+      'Linux AMD64/ARM64 requires glibc 2.39. macOS ARM64 requires macOS 15. The macOS binaries are ad-hoc signed and lack notarization. Interactive Keychain consent recovery remains unverified. Tor is optional and outside release qualification.',
+      'Candidate package, installed-feature, quickstart and provider checks gate publication on all three platforms. Eight installed streaming and transfer test cohorts and a finite command benchmark run against these exact binaries using the pinned installer with local candidate assets. Public HTTPS installation is a separate post-publication check.',
+      'The historical macOS first-TERM cleanup failure remains unexplained. This release adds diagnostics for investigation. Historical performance figures describe source 3e93fa4 carrying 0.2.3 metadata.',
+      'To roll back using this binary, run `marmish install --select 0.2.3`. Old binaries reject 0.3 version directories. Do not downgrade profiles after using newer state formats.',
+    ];
     release = await api(`${base}/releases`, {method: 'POST', body: {tag_name: tag, target_commitish: inventory.source,
-      name: `Marmish ${inventory.version}`, draft: true, prerelease: true, make_latest: 'false',
-      body: `Experimental Rust streaming release: streaming stdin/stdout/stderr, native file put/get with transfer-ID resume, rsync remote-shell support, streaming zlib compression and explicit cancellation. Disconnect does not cancel commands. Copy requires exactly matching peer versions; upgrade both peers together. Executable policies do not provide directory confinement. Linux AMD64/ARM64 requires glibc 2.39; macOS ARM64 requires macOS 15. macOS is ad-hoc signed, not notarized; interactive Keychain consent recovery remains unverified. Tor is optional and not a release gate. Candidate package, installed-feature, quickstart and provider checks gate publication on all three platforms. Streaming qualification is run separately against these exact binaries. The historical macOS first-TERM cleanup failure remains unexplained; added diagnostics do not establish a fix. Historical performance figures describe source 3e93fa4 carrying 0.2.3 metadata, not these release binaries. Public HTTPS installer verification is separate and not implied by the candidate. Rollback using this new binary: marmish install --select 0.2.3; old binaries reject 0.3 version directories. Do not downgrade profiles after using newer state formats.\n\n${proof}`}});
-    need(matchingRelease(release, tag, proof) && release.draft === true, 'invalid_created_release');
+      name: `Marmish ${inventory.version}`, draft: true, prerelease, make_latest: 'false',
+      body: [...notes, proof].join('\n\n')}});
+    need(matchingRelease(release, tag, proof, prerelease) && release.draft === true, 'invalid_created_release');
     await save('draft_created');
   }
   need(Number.isSafeInteger(release.id) && release.id > 0, 'invalid_release_id');
@@ -350,8 +361,9 @@ export async function publishRelease(input, adapters) {
     await unchangedMaster(api, base, inventory.source);
     need(await tagTarget(api, base, tag, proof) === inventory.source, 'tag_source_conflict');
     phase = 'publish';
-    const published = await api(`${base}/releases/${release.id}`, {method: 'PATCH', body: {draft: false, prerelease: true, make_latest: 'false'}});
-    need(matchingRelease(published, tag, proof) && published.draft === false, 'release_publish_mismatch');
+    const published = await api(`${base}/releases/${release.id}`, {method: 'PATCH',
+      body: {draft: false, prerelease, make_latest: prerelease ? 'false' : 'true'}});
+    need(matchingRelease(published, tag, proof, prerelease) && published.draft === false, 'release_publish_mismatch');
     await save('published');
     // Publishing changes draft untagged URLs. Requery and revalidate the public
     // inventory rather than using the pre-publication representation.

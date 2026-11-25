@@ -1,5 +1,7 @@
 # Gated native GitHub release automation
 
+The [current publication phase](automatic-release-gate.md) adds required live tests and sets the release channel from the version. This file retains the original automatic-publisher design.
+
 Beads: `marmish-scj`. Status: design APPROVED by actual Claude rounds2–3; integrated offline code review APPROVED in round2. Hosted candidate, automatic publication and six-cell public HTTPS qualification PASSED for v0.2.3; see [validation](../validation/native-automatic-release.md).
 See [review](../reviews/native-automatic-release-design-r3.md). The user authorizes a new release and appropriate
 releases following versioned mainline merges. The latest constraint excludes

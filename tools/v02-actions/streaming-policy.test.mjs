@@ -57,7 +57,8 @@ test('candidate-only workflows retain three platforms and closed nonpublishing s
   assert.deepEqual(options,STREAMING_COHORTS);
   assert.ok(installed.includes('timeout-minutes: 65'));
   assert.ok(installed.includes('3720'));
-  assert.ok(installed.includes('eight reviewed, separately dispatched installed cohorts'));
+  assert.match(installed,/^  workflow_dispatch:$/m);
+  assert.match(installed,/^  workflow_call:$/m);
   assert.match(installed,/name: Verify maintained rsync prerequisite without Linux privilege escalation\n\s+timeout-minutes: 5\n/);
   assert.ok(installed.includes('MARMISH_JOB_DEADLINE=$(( $(date +%s) + 3720 ))'));
   assert.ok(!installed.includes('contents: write'));

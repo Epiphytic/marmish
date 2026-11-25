@@ -9,6 +9,10 @@ from test_marmish_managed_workflow import step_blocks as steps
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {}  # Test-owned overrides; mutations never write workflow files.
 ONTOLOGY_ACTION = './.github/actions/code-ontology'
+QUALIFICATION_COHORTS = ('stream-matrix', 'rsync-matrix', 'copy-matrix', 'edge-stream', 'edge-rsync',
+                         'edge-copy', 'copy-interrupt-put', 'copy-interrupt-get')
+READ_ONLY = {'contents': 'read', 'actions': 'read'}
+ARTIFACT_SCOPE = "${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}"
 
 
 def source(name):
@@ -66,20 +70,163 @@ class ReleaseAutomation(unittest.TestCase):
         self.jobs = {name: block(jobs, '  ' + name + ':')
                      for name in fields(jobs, 2)}
         for job in self.jobs.values():
-            fields(job, 4)
-            block(job, '    steps:')
+            options = fields(job, 4)
+            if 'uses' not in options:
+                block(job, '    steps:')
 
-    def test_four_job_permissions_and_triggers(self):
-        self.assertEqual(set(self.jobs), {'inspect', 'reproduce-bootstrap', 'verify', 'publish'})
+    def test_job_permissions_and_triggers(self):
+        self.assertEqual(set(self.jobs), {'inspect', 'reproduce-bootstrap', 'qualification', 'benchmark', 'verify', 'publish'})
         self.assertEqual(block(self.text, 'permissions: {}'), 'permissions: {}\n')
         self.assertEqual(block(self.jobs['reproduce-bootstrap'], '    permissions: {}'), '    permissions: {}\n')
-        for job in ('inspect', 'verify', 'publish'):
+        for job in ('inspect', 'qualification', 'benchmark', 'verify', 'publish'):
             self.assertEqual(fields(block(self.jobs[job], '    permissions:'), 6),
                              {'contents': 'write' if job == 'publish' else 'read', 'actions': 'read'})
         events = block(self.text, 'on:')
         self.assertEqual(set(fields(events, 2)), {'workflow_run', 'workflow_dispatch'})
-        self.assertEqual(fields(block(events, '  workflow_run:'), 4)['workflows'], '[v0.2 native release candidates]')
+        self.assertEqual(fields(block(events, '  workflow_run:'), 4), {
+            'workflows': '[v0.2 native release candidates]', 'types': '[completed]', 'branches': '[master]',
+        })
+        self.assertEqual(fields(self.jobs['inspect'], 4)['if'],
+                         "github.ref == 'refs/heads/master' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')")
         self.assertEqual(fields(block(self.text, 'concurrency:'), 2)['cancel-in-progress'], 'false')
+        self.assertNotRegex(self.text, r'(?m)^\s*(?:-\s+)?continue-on-error\s*:')
+
+    def test_publication_requires_success_from_every_gate(self):
+        dependencies = {
+            'reproduce-bootstrap': ['inspect'],
+            'qualification': ['inspect'],
+            'benchmark': ['inspect', 'qualification'],
+            'verify': ['inspect', 'reproduce-bootstrap', 'qualification', 'benchmark'],
+            'publish': ['inspect', 'reproduce-bootstrap', 'qualification', 'benchmark', 'verify'],
+        }
+        for job, needs in dependencies.items():
+            with self.subTest(job=job):
+                options = fields(self.jobs[job], 4)
+                self.assertEqual(options['needs'], needs[0] if len(needs) == 1 else '[' + ', '.join(needs) + ']')
+                condition = [f"needs.{name}.result == 'success'" for name in needs]
+                if job in ('reproduce-bootstrap', 'qualification', 'benchmark'):
+                    condition.append("needs.inspect.outputs.skip == 'false'")
+                self.assertEqual(options['if'], ' && '.join(condition))
+
+        uploads = fields(block(self.jobs['inspect'], '    outputs:'), 6)
+        for key, output in (('source', 'candidate_source'), ('run_id', 'candidate_run_id'),
+                            ('run_attempt', 'candidate_run_attempt')):
+            self.assertEqual(uploads[output], '${{ steps.candidate-source.outputs.' + key + ' }}')
+
+    def test_reusable_calls_bind_verified_attempt_and_serial_cohorts(self):
+        inputs = {
+            'candidate_run_id': '${{ needs.inspect.outputs.candidate_run_id }}',
+            'candidate_run_attempt': '${{ needs.inspect.outputs.candidate_run_attempt }}',
+            'source_commit': '${{ needs.inspect.outputs.candidate_source }}',
+            'relay': "${{ vars.MARMISH_RELEASE_TEST_RELAY || 'wss://relay.us.whitenoise.chat/' }}",
+            'release_gate': 'true',
+        }
+        for job, file, cohort in (('qualification', 'streaming-installed.yml', '${{ matrix.cohort }}'),
+                                  ('benchmark', 'v02-installed.yml', 'benchmark')):
+            with self.subTest(job=job):
+                options = fields(self.jobs[job], 4)
+                allowed = {'if', 'needs', 'permissions', 'uses', 'with'}
+                if job == 'qualification':
+                    allowed.add('strategy')
+                self.assertEqual(set(options), allowed)
+                self.assertEqual(options['uses'], './.github/workflows/' + file)
+                self.assertEqual(fields(block(self.jobs[job], '    with:'), 6), {**inputs, 'cohort': cohort})
+        strategy = block(self.jobs['qualification'], '    strategy:')
+        self.assertEqual(fields(strategy, 6), {'fail-fast': 'true', 'max-parallel': '1', 'matrix': ''})
+        self.assertEqual(fields(block(strategy, '      matrix:'), 8),
+                         {'cohort': '[' + ', '.join(QUALIFICATION_COHORTS) + ']'})
+
+    def check_installed_worker(self, file, gate_group, manual_group, matrix_name, rollup_name):
+        text = source(file)
+        self.assertEqual(fields(block(text, 'permissions:'), 2), READ_ONLY)
+        self.assertNotRegex(text, r'(?m)^\s*(?:-\s+)?continue-on-error\s*:')
+        events = block(text, 'on:')
+        self.assertEqual(set(fields(events, 2)), {'workflow_dispatch', 'workflow_call'})
+        manual = block(block(events, '  workflow_dispatch:'), '    inputs:')
+        call = block(block(events, '  workflow_call:'), '    inputs:')
+        names = {'cohort', 'candidate_run_id', 'candidate_run_attempt', 'source_commit', 'relay'}
+        self.assertEqual(set(fields(manual, 6)), names)
+        self.assertEqual(set(fields(call, 6)), names | {'release_gate'})
+        for name in names | {'release_gate'}:
+            self.assertEqual(fields(block(call, f'      {name}:'), 8),
+                             {'type': 'boolean' if name == 'release_gate' else 'string', 'required': 'true'})
+        group = "${{ inputs.release_gate && format('marmish-release-" + gate_group + "-{0}-{1}-{2}', github.run_id, github.run_attempt, inputs.cohort) || '" + manual_group + "' }}"
+        self.assertEqual(fields(block(text, 'concurrency:'), 2), {'group': group, 'cancel-in-progress': 'false'})
+        self.assertEqual(fields(block(text, 'env:'), 2), {
+            'RELEASE_GATE': '${{ inputs.release_gate }}',
+            'CANDIDATE_RUN_ID': '${{ inputs.candidate_run_id }}',
+            'CANDIDATE_RUN_ATTEMPT': '${{ inputs.candidate_run_attempt }}',
+            'SOURCE_COMMIT': '${{ inputs.source_commit }}',
+            'TEST_RELAY': '${{ inputs.relay }}',
+            'TEST_COHORT': '${{ inputs.cohort }}',
+        })
+
+        jobs = block(text, 'jobs:')
+        context = 'v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}' + ARTIFACT_SCOPE
+        self.assertEqual(text.count('name: ' + context), len(fields(jobs, 2)))
+        for job in fields(jobs, 2):
+            worker = block(jobs, f'  {job}:')
+            self.assertNotIn('permissions', fields(worker, 4))
+            self.assertEqual(worker.count('name: ' + context), 1)
+            checkout, = (step for step in steps(worker) if step.startswith('uses: actions/checkout@'))
+            self.assert_trusted_checkout(checkout, history=True)
+            for step in steps(worker):
+                if not step.startswith('uses: actions/download-artifact@'):
+                    continue
+                options = fields(block(step, '        with:'), 10)
+                if 'run-id' in options:
+                    self.assertEqual(options['run-id'], '${{ inputs.candidate_run_id }}')
+                    self.assertTrue((options.get('name') or options.get('pattern')).endswith(
+                        '-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}'))
+
+        resolve = block(jobs, '  resolve:')
+        self.assertEqual(fields(resolve, 4)['if'], "github.ref == 'refs/heads/master'")
+        self.assertEqual([line.strip() for line in resolve.splitlines() if 'workflow.mjs' in line], [
+            'node tools/v02-actions/workflow.mjs validate-candidate',
+            'run: node tools/v02-actions/workflow.mjs resolve',
+        ])
+        suffix = '-${{ inputs.candidate_run_id }}-${{ inputs.candidate_run_attempt }}'
+        for job in (resolve, block(jobs, f'  {matrix_name}:'), block(jobs, f'  {rollup_name}:')):
+            self.assertIn('name: v02-pinned-bootstrap' + suffix + '\n', job)
+        matrix = block(jobs, f'  {matrix_name}:')
+        self.assertEqual(fields(matrix, 4)['needs'], 'resolve')
+        self.assertIn('name: v02-candidate-${{ matrix.target }}' + suffix + '\n', matrix)
+        self.assertIn('run: node tools/v02-actions/workflow.mjs verify-context', matrix)
+        self.assertEqual(re.findall(r'^          - runner: (.+)\n            role: (.+)\n            target: (.+)$', matrix, re.M), [
+            ('ubuntu-24.04', 'linux-amd64', 'x86_64-unknown-linux-gnu'),
+            ('ubuntu-24.04-arm', 'linux-arm64', 'aarch64-unknown-linux-gnu'),
+            ('macos-15', 'macos-arm64', 'aarch64-apple-darwin'),
+        ])
+        self.assertEqual(len(block(matrix, '      matrix:').splitlines()), 11)
+        return jobs, matrix, block(jobs, f'  {rollup_name}:')
+
+    def test_streaming_call_uses_native_rollup_and_scoped_artifacts(self):
+        jobs, matrix, rollup = self.check_installed_worker('streaming-installed.yml', 'streaming',
+                                                            'marmish-streaming-installed', 'matrix', 'rollup')
+        self.assertEqual(set(fields(jobs, 2)), {'resolve', 'matrix', 'rollup'})
+        self.assertNotIn('if', fields(matrix, 4))
+        self.assertEqual(fields(rollup, 4)['needs'], '[resolve, matrix]')
+        self.assertEqual(fields(rollup, 4)['if'], "always() && needs.resolve.result == 'success'")
+        self.assertEqual(fields(block(rollup, '    env:'), 6)['MATRIX_RESULT'], '${{ needs.matrix.result }}')
+        self.assertIn('name: v02-installed-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}' + ARTIFACT_SCOPE + '-${{ matrix.role }}', matrix)
+        self.assertIn('name: v02-installed-rollup-${{ github.run_id }}-${{ github.run_attempt }}' + ARTIFACT_SCOPE, rollup)
+        self.assertIn('run: node tools/v02-actions/workflow.mjs gather', rollup)
+        self.assertIn('"$TOOLS_ROOT/marmish-installed-check" rollup --context "$CONTEXT"', rollup)
+        self.assertIn('--records "$RECORDS_ROOT" --matrix-result "$MATRIX_RESULT" --output', rollup)
+
+    def test_benchmark_call_uses_native_rollup_and_scoped_artifacts(self):
+        jobs, local, rollup = self.check_installed_worker('v02-installed.yml', 'benchmark',
+                                                           'marmish-v02-installed', 'local', 'local-rollup')
+        self.assertEqual(set(fields(jobs, 2)), {'resolve', 'matrix', 'rollup', 'local', 'local-rollup'})
+        self.assertEqual(fields(local, 4)['if'], "inputs.cohort != 'matrix'")
+        self.assertEqual(fields(rollup, 4)['needs'], '[resolve, local]')
+        self.assertEqual(fields(rollup, 4)['if'], "always() && needs.resolve.result == 'success' && inputs.cohort != 'matrix'")
+        self.assertEqual(fields(block(rollup, '    env:'), 6)['LOCAL_RESULT'], '${{ needs.local.result }}')
+        self.assertIn('run: node tools/v02-actions/local.mjs', local)
+        self.assertIn('name: v02-installed-${{ inputs.cohort }}-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}', local)
+        self.assertIn('name: v02-installed-${{ inputs.cohort }}-rollup-${{ github.run_id }}-${{ github.run_attempt }}', rollup)
+        self.assertIn('"$TOOLS_ROOT/marmish-installed-check" cohort-rollup --cohort "$TEST_COHORT"', rollup)
+        self.assertIn('--cohort-result "$LOCAL_RESULT" --output', rollup)
 
     def test_pinned_actions_no_write_job_dependency_or_candidate_execution(self):
         identities = {
@@ -96,10 +243,11 @@ class ReleaseAutomation(unittest.TestCase):
             'publish': ['uses: actions/checkout@', 'uses: actions/download-artifact@', 'uses: actions/download-artifact@',
                 'name: Publish immutable GitHub assets and fast-forward installer', 'uses: actions/upload-artifact@'],
         }
-        for name, job in self.jobs.items():
+        for name, expected_steps in identities.items():
+            job = self.jobs[name]
             selected = steps(job)
-            self.assertEqual(len(selected), len(identities[name]))
-            for step, expected in zip(selected, identities[name]):
+            self.assertEqual(len(selected), len(expected_steps))
+            for step, expected in zip(selected, expected_steps):
                 first = step.splitlines()[0]
                 if expected.endswith('@'):
                     self.assertRegex(first, '^' + re.escape(expected) + r'[0-9a-f]{40}$')
@@ -126,6 +274,14 @@ class ReleaseAutomation(unittest.TestCase):
                     self.assertNotIn('GH_TOKEN', step)
                     self.assertNotIn('github.token', step)
                     self.assertNotRegex(step, re.compile(r'^(?:uses:|        uses:) actions/checkout@', re.M))
+        for job, expected in {
+            'verify': ['${{ needs.inspect.outputs.inputs_artifact_id }}',
+                       '${{ needs.reproduce-bootstrap.outputs.render_artifact_id }}'],
+            'publish': ['${{ needs.inspect.outputs.inputs_artifact_id }}',
+                        '${{ needs.verify.outputs.inventory_artifact_id }}'],
+        }.items():
+            downloads = (step for step in steps(self.jobs[job]) if step.startswith('uses: actions/download-artifact@'))
+            self.assertEqual([fields(block(step, '        with:'), 10)['artifact-ids'] for step in downloads], expected)
 
     def test_candidate_source_fallback_and_explicit_version_trigger(self):
         text = source('v02-release.yml')
@@ -172,12 +328,15 @@ class ReleaseAutomation(unittest.TestCase):
             'INSPECTION_SHA256': '${{ steps.inspect.outputs.inspection_sha256 }}',
         })
         self.assertIn("import {loadInspection} from './tools/v02-actions/release-render.mjs';", run_text(read_source))
-        self.assertIn('await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);', run_text(read_source))
-        self.assertIn('source=${inventory.source}', run_text(read_source))
+        self.assertIn('const {inventory, bootstrap} = await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);',
+                      run_text(read_source))
+        self.assertIn("import {releaseQualificationSource} from './tools/v02-actions/workflow.mjs';", run_text(read_source))
+        proof = "releaseQualificationSource({...process.env, SOURCE_COMMIT: inventory.source, RELEASE_GATE: 'true'}, {bootstrap});"
+        emit = r'await appendFile(process.env.GITHUB_OUTPUT, `source=${inventory.source}\nrun_id=${inventory.candidate.run_id}\nrun_attempt=${inventory.candidate.run_attempt}\n`);'
+        self.assertEqual(run_text(read_source).splitlines()[-3:], [proof, emit, 'JS'])
         self.assert_ontology_action(ontology, '${{ steps.candidate-source.outputs.source }}', active)
         self.assertEqual(fields(upload, 8)['if'], active)
         self.assertNotIn('continue-on-error', fields(self.jobs['inspect'], 4))
-        self.assertEqual(fields(self.jobs['publish'], 4)['needs'], '[inspect, reproduce-bootstrap, verify]')
 
     def test_ontology_gates_legacy_build_before_any_matrix_and_binds_sha(self):
         text = source('release.yml')
@@ -431,6 +590,46 @@ class MutationTests(unittest.TestCase):
                               ('${{ inputs.source_commit || github.sha }}', '${{ inputs.source_commit }}')]:
             with self.subTest(before=before):
                 self.check_source('v02-release.yml', before, after)
+
+    def test_qualification_security_mutations(self):
+        for before, after in [
+            ('needs: [inspect, reproduce-bootstrap, qualification, benchmark, verify]',
+             'needs: [inspect, reproduce-bootstrap, benchmark, verify]'),
+            ("needs.qualification.result == 'success'", "needs.qualification.result != 'failure'"),
+            ("needs.benchmark.result == 'success'", "needs.benchmark.result != 'cancelled'"),
+            ("if: needs.inspect.result == 'success' && needs.inspect.outputs.skip == 'false'",
+             "if: needs.inspect.result == 'success'"),
+            ('  qualification:\n', '  qualification:\n    continue-on-error: true\n'),
+            ('    uses: ./.github/workflows/streaming-installed.yml',
+             '    uses: ./.github/workflows/streaming-installed.yml\n    secrets: inherit'),
+            ('      candidate_run_id: ${{ needs.inspect.outputs.candidate_run_id }}',
+             '      candidate_run_id: ${{ inputs.candidate_run_id }}'),
+            ('      candidate_run_attempt: ${{ needs.inspect.outputs.candidate_run_attempt }}',
+             '      candidate_run_attempt: ${{ github.run_attempt }}'),
+            ('      source_commit: ${{ needs.inspect.outputs.candidate_source }}',
+             '      source_commit: ${{ github.sha }}'),
+            ('      contents: read\n      actions: read\n    strategy:',
+             '      contents: write\n      actions: read\n    strategy:'),
+            ('        cohort: [' + ', '.join(QUALIFICATION_COHORTS) + ']',
+             '        cohort: [' + ', '.join(QUALIFICATION_COHORTS[:-1]) + ']'),
+            ('      max-parallel: 1', '      max-parallel: 3'),
+            ('      release_gate: true', '      release_gate: false'),
+            ('          releaseQualificationSource(', '          // releaseQualificationSource('),
+        ]:
+            with self.subTest(before=before):
+                self.check_source('v02-publish.yml', before, after)
+        for file, before, after in [
+            ('streaming-installed.yml', '        type: boolean', '        type: string'),
+            ('streaming-installed.yml', ARTIFACT_SCOPE, ''),
+            ('streaming-installed.yml', 'marmish-release-streaming', 'marmish-native-publication'),
+            ('streaming-installed.yml', '"$TOOLS_ROOT/marmish-installed-check" rollup', 'echo rollup'),
+            ('v02-installed.yml', '          run-id: ${{ inputs.candidate_run_id }}', '          run-id: ${{ github.run_id }}'),
+            ('v02-installed.yml', '        run: node tools/v02-actions/local.mjs', '        run: true'),
+            ('v02-installed.yml', '        if: always()\n        uses: actions/upload-artifact@',
+             '        if: always()\n        continue-on-error: true\n        uses: actions/upload-artifact@'),
+        ]:
+            with self.subTest(file=file, before=before):
+                self.check_source(file, before, after)
 
     def test_ontology_security_mutations(self):
         for name, before, after in [
