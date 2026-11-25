@@ -1456,14 +1456,23 @@ mod tests {
     fn native_helper_accepts_exact_limit_without_reallocation_and_rejects_next_byte() {
         let f = Fixture::new();
         let helper = f.base.path().join("fake");
-        write_new(&helper, b"#!/bin/sh\nexec head -c 8192 /dev/zero\n").unwrap();
+        // Keep stdin open until the parent finishes writing the request.
+        write_new(
+            &helper,
+            b"#!/bin/sh\n/bin/cat >/dev/null && exec head -c 8192 /dev/zero\n",
+        )
+        .unwrap();
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
         let response =
             helper_exchange(&helper, b"{}", Instant::now() + Duration::from_secs(2)).unwrap();
         assert_eq!(response.len(), HELPER_LIMIT);
         assert_eq!(response.capacity(), HELPER_LIMIT + 1);
         assert!(response.iter().all(|b| *b == 0));
-        fs::write(&helper, b"#!/bin/sh\nexec head -c 8193 /dev/zero\n").unwrap();
+        fs::write(
+            &helper,
+            b"#!/bin/sh\n/bin/cat >/dev/null && exec head -c 8193 /dev/zero\n",
+        )
+        .unwrap();
         assert!(matches!(
             helper_exchange(&helper, b"{}", Instant::now() + Duration::from_secs(2)),
             Err(Error::Identity("helper_oversize"))
