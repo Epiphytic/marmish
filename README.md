@@ -28,9 +28,10 @@ failed in the interrupted-copy cohort. These are candidate results,
 not tests of released v0.3.0 bytes.
 
 **v0.3.1 is in preparation, not published.** It retains the copy refusal-test
-correction and debug-only cleanup diagnostics. The [patch release plan](docs/phases/v0.3.1-release.md)
-requires a fresh versioned candidate, all eight installed streaming cohorts and
-separate finite benchmarks before publication. The installer still selects 0.3.0.
+correction and debug-only cleanup diagnostics. The [automatic release pipeline](docs/phases/automatic-release-gate.md)
+requires a fresh versioned candidate, all eight installed streaming and transfer
+cohorts, and a finite benchmark before publishing a GitHub Release. The
+installer still selects 0.3.0.
 The [macOS preflight](docs/validation/v0.3.1-preflight.md) passed the combined
 native suites, 80 cleanup repetitions and strict release Clippy at `11e93a1`;
 this is bounded non-reproduction, not a fix for the historical first-TERM cause.

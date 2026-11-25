@@ -55,22 +55,46 @@ export function sourceDigest(source) {
   return digest(execFileSync('git', ['ls-tree', '-r', source, '--', ...SOURCE_PATHS],
     {env: childEnvironment(process.env), maxBuffer: 2 * 1024 * 1024}));
 }
+export function releaseQualificationSource(env, {
+  bootstrap,
+  git = args => execFileSync('git', args, {env: childEnvironment(env), maxBuffer: 262144}),
+} = {}) {
+  const source = env.SOURCE_COMMIT, control = env.GITHUB_SHA;
+  requireThat(hex(source, 40) && hex(control, 40), 'invalid_candidate_source');
+  if (source === control) return source;
+  requireThat(env.RELEASE_GATE === 'true' && env.GITHUB_REF === 'refs/heads/master'
+    && env.GITHUB_REPOSITORY === 'Epiphytic/marmish'
+    && ['workflow_run', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME), 'invalid_candidate_source');
+  const installer = 'scripts/install.sh';
+  requireThat(git(['rev-list', '--parents', '-n', '1', control]).toString().trim() === `${control} ${source}`
+    && git(['diff-tree', '--no-commit-id', '--name-status', '--no-renames', '-r', source, control]).toString()
+      === `M\t${installer}\n`
+    && /^100755 blob [0-9a-f]{40}\tscripts\/install\.sh\n$/.test(git(['ls-tree', control, '--', installer]).toString()),
+  'qualification_source_changed');
+  if (bootstrap !== undefined) {
+    requireThat(Buffer.isBuffer(bootstrap) && git(['show', `${control}:${installer}`]).equals(bootstrap),
+      'qualification_bootstrap_mismatch');
+  }
+  return source;
+}
 export function candidateInputs(env, policy) {
   const diagnostic = diagnosticPolicy(policy);
   cohortLifetime(env);
   for (const key of ['CANDIDATE_RUN_ID', 'CANDIDATE_RUN_ATTEMPT']) {
     requireThat(/^[1-9][0-9]{0,15}$/.test(env[key] ?? ''), 'invalid_candidate_run');
   }
-  requireThat(env.GITHUB_REPOSITORY === 'Epiphytic/marmish'
-    && hex(env.SOURCE_COMMIT, 40) && hex(env.GITHUB_SHA, 40)
-    && (diagnostic ? env.SOURCE_COMMIT === policy.source && env.CANDIDATE_RUN_ID === policy.run
-      && env.CANDIDATE_RUN_ATTEMPT === policy.attempt : env.SOURCE_COMMIT === env.GITHUB_SHA), 'invalid_candidate_source');
-  if (diagnostic) return {repository:env.GITHUB_REPOSITORY,run_id:policy.run,run_attempt:policy.attempt,source:policy.source};
+  requireThat(env.GITHUB_REPOSITORY === 'Epiphytic/marmish', 'invalid_candidate_source');
+  if (diagnostic) {
+    requireThat(hex(env.GITHUB_SHA, 40) && env.SOURCE_COMMIT === policy.source
+      && env.CANDIDATE_RUN_ID === policy.run && env.CANDIDATE_RUN_ATTEMPT === policy.attempt, 'invalid_candidate_source');
+    return {repository:env.GITHUB_REPOSITORY,run_id:policy.run,run_attempt:policy.attempt,source:policy.source};
+  }
+  const source = releaseQualificationSource(env);
   const relay = new URL(env.TEST_RELAY);
   requireThat(relay.protocol === 'wss:' && !relay.username && !relay.password && !relay.hash
     && relay.hostname && !relay.hostname.endsWith('.onion'), 'invalid_test_relay');
   return {repository: env.GITHUB_REPOSITORY, run_id: env.CANDIDATE_RUN_ID,
-    run_attempt: env.CANDIDATE_RUN_ATTEMPT, source: env.SOURCE_COMMIT, relay: relay.href};
+    run_attempt: env.CANDIDATE_RUN_ATTEMPT, source, relay: relay.href};
 }
 export const INSTALLED_CANDIDATE_PATHS = Object.freeze([
   '.github/workflows/v02-release.yml', '.github/workflows/streaming-candidate.yml',
@@ -150,7 +174,10 @@ export async function validateCandidate(env, retentionUntil = 0, injectedTranspo
   const reply = await transport.request(`https://api.github.com/repos/${c.repository}/actions/runs/${c.run_id}/attempts/${c.run_attempt}`,
     true, 2 * 1024 * 1024, deadline);
   requireThat(reply.bytes, 'candidate_api_redirect');
-  checkRun(JSON.parse(reply.bytes), c, policy, INSTALLED_CANDIDATE_PATHS);
+  const run = JSON.parse(reply.bytes);
+  const releaseGate = env.RELEASE_GATE === 'true';
+  checkRun(run, c, policy, releaseGate ? undefined : INSTALLED_CANDIDATE_PATHS);
+  if (releaseGate) requireThat(run.head_sha === c.source, 'invalid_candidate_provenance');
   if (diagnostic) {
     const jobs = [];
     let total;
@@ -223,9 +250,10 @@ async function resolve(env) {
 export async function verifyContext(env) {
   const context = JSON.parse(await boundedFile(env.CONTEXT, 65536));
   requireThat(context.cohort === cohortLifetime(env).name, 'workflow_cohort');
-  requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === env.GITHUB_SHA
+  const source = env.RELEASE_GATE === 'true' ? releaseQualificationSource(env) : env.GITHUB_SHA;
+  requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === source
     && String(context.run_id) === env.GITHUB_RUN_ID && String(context.run_attempt) === env.GITHUB_RUN_ATTEMPT
-    && context.harness_sha256 === sourceDigest(env.GITHUB_SHA), 'workflow_context');
+    && context.harness_sha256 === sourceDigest(source), 'workflow_context');
   const role = env.ROLE;
   requireThat(String(context.candidate_run_id) === env.CANDIDATE_RUN_ID
     && String(context.candidate_run_attempt) === env.CANDIDATE_RUN_ATTEMPT
@@ -256,9 +284,11 @@ export async function gather(env, injectedTransport, {
   now = Date.now, delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 } = {}) {
   const context = JSON.parse(await boundedFile(env.CONTEXT, 65536));
-  requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === env.GITHUB_SHA
+  const releaseGate = env.RELEASE_GATE === 'true';
+  const source = releaseGate ? releaseQualificationSource(env) : env.GITHUB_SHA;
+  requireThat(context.repository === env.GITHUB_REPOSITORY && context.source_commit === source
     && String(context.run_id) === env.GITHUB_RUN_ID && String(context.run_attempt) === env.GITHUB_RUN_ATTEMPT, 'rollup_context');
-  const transport = injectedTransport ?? new ArtifactTransport({context, token: env.GH_TOKEN,
+  const transport = injectedTransport ?? new ArtifactTransport({context, token: env.GH_TOKEN, paginate: releaseGate,
     budgetFile: path.join(env.RESOLVE_ROOT, 'api-budget.json')});
   const deadline = now() + 120_000;
   const artifacts = await gatherRetry(() => transport.list(deadline), deadline, now, delay);

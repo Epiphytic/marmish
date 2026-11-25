@@ -140,36 +140,50 @@ async function body(response, limit) {
   return Buffer.concat(chunks);
 }
 
-function parseArtifactList(bytes) {
+const ARTIFACT_PAGE_SIZE = 100;
+const MAX_ARTIFACT_PAGES = 5;
+
+function artifactListError(category, reason, total, count) {
+  const error = new Error(category);
+  error.artifactList = {reason,
+    total_count: Number.isSafeInteger(total) && total >= 0 && total <= ARTIFACT_PAGE_SIZE ? total : null,
+    artifact_count: count !== null && count <= ARTIFACT_PAGE_SIZE ? count : null};
+  if (category === 'artifact_retry') error.retryAfter = 30_000;
+  return error;
+}
+
+function parseArtifactList(bytes, pageLimit) {
   let result;
   const fail = (category, reason) => {
-    const total = result?.total_count;
     const count = Array.isArray(result?.artifacts) ? result.artifacts.length : null;
-    const error = new Error(category);
-    error.artifactList = {reason,
-      total_count: Number.isSafeInteger(total) && total >= 0 && total <= 100 ? total : null,
-      artifact_count: count !== null && count <= 100 ? count : null};
-    if (category === 'artifact_retry') error.retryAfter = 30_000;
-    throw error;
+    throw artifactListError(category, reason, result?.total_count, count);
   };
   try { result = JSON.parse(bytes); }
   catch { fail('artifact_list_json', 'invalid_json'); }
   if (!result || typeof result !== 'object' || Array.isArray(result)) fail('artifact_list_shape', 'invalid_object');
   if (!Number.isSafeInteger(result.total_count) || result.total_count < 0) fail('artifact_list_total', 'invalid_total');
-  if (result.total_count > 100) fail('artifact_list_total', 'total_bound');
+  if (result.total_count > pageLimit * ARTIFACT_PAGE_SIZE) fail('artifact_list_total', 'total_bound');
   if (!Array.isArray(result.artifacts)) fail('artifact_list_items', 'invalid_items');
-  if (result.artifacts.length > 100) fail('artifact_list_items', 'items_bound');
-  // Never return or scan a partial snapshot. Only the supervisor retries this
-  // typed, bounded inconsistency, under its original deadline and API budget.
-  if (result.artifacts.length !== result.total_count) fail('artifact_retry', 'count_mismatch');
-  return result.artifacts;
+  if (result.artifacts.length > ARTIFACT_PAGE_SIZE) fail('artifact_list_items', 'items_bound');
+  return result;
+}
+
+function artifactPageIdentities(artifacts) {
+  const ids = new Set(), names = new Set();
+  for (const artifact of artifacts) {
+    requireThat(Number.isSafeInteger(artifact?.id) && artifact.id > 0
+      && typeof artifact.name === 'string' && artifact.name.length > 0, 'artifact_metadata');
+    requireThat(!ids.has(artifact.id) && !names.has(artifact.name), 'artifact_duplicate');
+    ids.add(artifact.id);
+    names.add(artifact.name);
+  }
 }
 
 export class ArtifactTransport {
-  constructor({context, token, budgetFile, fetcher = fetch}) {
+  constructor({context, token, budgetFile, fetcher = fetch, paginate = false}) {
     requireThat(typeof token === 'string' && token.length > 0, 'missing_api_token');
     this.context = context; this.token = token; this.budgetFile = budgetFile;
-    this.fetcher = fetcher; this.used = null;
+    this.fetcher = fetcher; this.used = null; this.paginate = paginate === true;
   }
   async request(url, api, limit, deadline, signal, retryListedZip404 = false) {
     signal?.throwIfAborted();
@@ -225,10 +239,32 @@ export class ArtifactTransport {
     return {bytes: await body(response, limit)};
   }
   async list(deadline, signal) {
-    const url = `https://api.github.com/repos/${this.context.repository}/actions/runs/${this.context.run_id}/artifacts?per_page=100`;
-    const reply = await this.request(url, true, 2 * 1024 * 1024, deadline, signal);
-    requireThat(reply.bytes, 'artifact_api_redirect');
-    return parseArtifactList(reply.bytes);
+    const url = `https://api.github.com/repos/${this.context.repository}/actions/runs/${this.context.run_id}/artifacts?per_page=${ARTIFACT_PAGE_SIZE}`;
+    const pageLimit = this.paginate ? MAX_ARTIFACT_PAGES : 1;
+    const entries = [], ids = new Map(), names = new Set();
+    let snapshotTotal;
+    for (let page = 1; page <= pageLimit; page++) {
+      const reply = await this.request(this.paginate ? `${url}&page=${page}` : url,
+        true, 2 * 1024 * 1024, deadline, signal);
+      requireThat(reply.bytes, 'artifact_api_redirect');
+      const {total_count: total, artifacts} = parseArtifactList(reply.bytes, pageLimit);
+      if (this.paginate) artifactPageIdentities(artifacts);
+      snapshotTotal ??= total;
+      const expected = Math.min(ARTIFACT_PAGE_SIZE, snapshotTotal - entries.length);
+      const inconsistent = () => artifactListError('artifact_retry', 'count_mismatch', total, artifacts.length);
+      // Reject an inconsistent snapshot before exposing any of its records.
+      if (total !== snapshotTotal || artifacts.length !== expected) throw inconsistent();
+      if (!this.paginate) return artifacts;
+      for (const {id, name} of artifacts) {
+        if (ids.get(id) === name) throw inconsistent();
+        requireThat(!ids.has(id) && !names.has(name), 'artifact_duplicate');
+        ids.set(id, name);
+        names.add(name);
+      }
+      entries.push(...artifacts);
+      if (entries.length === snapshotTotal) return entries;
+    }
+    throw artifactListError('artifact_list_total', 'total_bound', snapshotTotal, null);
   }
   async download(entries, name, basename, deadline, signal, retryListedZip404 = false) {
     const matching = entries.filter(entry => entry.name === name);

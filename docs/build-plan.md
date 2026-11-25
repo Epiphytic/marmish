@@ -1,6 +1,15 @@
 # Marmish build plan
 
-## Active plan: v0.3 publication, then qualification corrections and benchmarks
+## Active plan: automatic native qualification and publication
+
+The [automatic release gate](phases/automatic-release-gate.md) binds installed
+end-to-end tests and finite benchmarks on all three platforms to one exact
+candidate attempt. A successful gate publishes a GitHub Release and updates the
+installer. Stable versions become full releases. A failing test prevents
+publication without disabling the workflow. Bootstrap v0.3.1 with a fresh
+candidate, then let subsequent version bumps trigger the same pipeline.
+
+## v0.3 publication, qualification corrections and benchmarks
 
 The [v0.3 release plan](phases/v0.3-release.md) governs the user-authorized
 publication of the existing Rust streaming, rsync and native-copy product as
@@ -48,9 +57,8 @@ orders the remaining work: final version and neutral release notes first, then
 one fresh final candidate, macOS regression, the eight installed cohorts and
 separate finite benchmark, followed by trusted publication and HTTPS installation
 checks. The unlaunched `11e93a1` cohort package is superseded; its 0.3.0 candidate
-is preflight only. Automatic publication is held during final qualification,
-with a durable restoration obligation; no early release or relabeling of old
-measurements is permitted. [Current macOS preflight](validation/v0.3.1-preflight.md)
+is preflight only. The automatic release gate above supersedes its manual hold and dispatch steps.
+Keep historical measurements tied to their original source. [Current macOS preflight](validation/v0.3.1-preflight.md)
 is successful, without identifying the historical cleanup cause.
 
 ## Historical native v0.2 baseline

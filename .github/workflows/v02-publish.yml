@@ -33,6 +33,9 @@ jobs:
       skip: ${{ steps.inspect.outputs.skip }}
       inspection_sha256: ${{ steps.inspect.outputs.inspection_sha256 }}
       inputs_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      candidate_source: ${{ steps.candidate-source.outputs.source }}
+      candidate_run_id: ${{ steps.candidate-source.outputs.run_id }}
+      candidate_run_attempt: ${{ steps.candidate-source.outputs.run_attempt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -58,8 +61,10 @@ jobs:
           node --input-type=module <<'JS'
           import {appendFile} from 'node:fs/promises';
           import {loadInspection} from './tools/v02-actions/release-render.mjs';
-          const {inventory} = await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);
-          await appendFile(process.env.GITHUB_OUTPUT, `source=${inventory.source}\n`);
+          import {releaseQualificationSource} from './tools/v02-actions/workflow.mjs';
+          const {inventory, bootstrap} = await loadInspection(process.env.INSPECTION_ROOT, process.env.INSPECTION_SHA256);
+          releaseQualificationSource({...process.env, SOURCE_COMMIT: inventory.source, RELEASE_GATE: 'true'}, {bootstrap});
+          await appendFile(process.env.GITHUB_OUTPUT, `source=${inventory.source}\nrun_id=${inventory.candidate.run_id}\nrun_attempt=${inventory.candidate.run_attempt}\n`);
           JS
       - name: Verify the candidate's committed ontology
         if: steps.inspect.outputs.skip == 'false'
@@ -76,7 +81,7 @@ jobs:
           retention-days: 14
   reproduce-bootstrap:
     needs: inspect
-    if: needs.inspect.outputs.skip == 'false'
+    if: needs.inspect.result == 'success' && needs.inspect.outputs.skip == 'false'
     permissions: {}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -113,8 +118,42 @@ jobs:
           path: ${{ runner.temp }}/publish-render/
           if-no-files-found: error
           retention-days: 14
+  qualification:
+    needs: inspect
+    if: needs.inspect.result == 'success' && needs.inspect.outputs.skip == 'false'
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        cohort: [stream-matrix, rsync-matrix, copy-matrix, edge-stream, edge-rsync, edge-copy, copy-interrupt-put, copy-interrupt-get]
+    uses: ./.github/workflows/streaming-installed.yml
+    with:
+      cohort: ${{ matrix.cohort }}
+      candidate_run_id: ${{ needs.inspect.outputs.candidate_run_id }}
+      candidate_run_attempt: ${{ needs.inspect.outputs.candidate_run_attempt }}
+      source_commit: ${{ needs.inspect.outputs.candidate_source }}
+      relay: ${{ vars.MARMISH_RELEASE_TEST_RELAY || 'wss://relay.us.whitenoise.chat/' }}
+      release_gate: true
+  benchmark:
+    needs: [inspect, qualification]
+    if: needs.inspect.result == 'success' && needs.qualification.result == 'success' && needs.inspect.outputs.skip == 'false'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/v02-installed.yml
+    with:
+      cohort: benchmark
+      candidate_run_id: ${{ needs.inspect.outputs.candidate_run_id }}
+      candidate_run_attempt: ${{ needs.inspect.outputs.candidate_run_attempt }}
+      source_commit: ${{ needs.inspect.outputs.candidate_source }}
+      relay: ${{ vars.MARMISH_RELEASE_TEST_RELAY || 'wss://relay.us.whitenoise.chat/' }}
+      release_gate: true
   verify:
-    needs: [inspect, reproduce-bootstrap]
+    needs: [inspect, reproduce-bootstrap, qualification, benchmark]
+    if: needs.inspect.result == 'success' && needs.reproduce-bootstrap.result == 'success' && needs.qualification.result == 'success' && needs.benchmark.result == 'success'
     permissions:
       contents: read
       actions: read
@@ -162,7 +201,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   publish:
-    needs: [inspect, reproduce-bootstrap, verify]
+    needs: [inspect, reproduce-bootstrap, qualification, benchmark, verify]
+    if: needs.inspect.result == 'success' && needs.reproduce-bootstrap.result == 'success' && needs.qualification.result == 'success' && needs.benchmark.result == 'success' && needs.verify.result == 'success'
     permissions:
       contents: write
       actions: read

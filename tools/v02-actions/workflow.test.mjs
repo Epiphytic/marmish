@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {candidateInputs, checkRun, checkTooling, verifyTools, verifyContext, gather, sourceDigest, SOURCE_PATHS, TARGETS, cohortLifetime, PROVIDER_DIAGNOSTIC, DIAGNOSTIC_PATHS, checkDiagnosticJobs, checkDiagnosticChanges, validateCandidate, providerDiagnostic} from './workflow.mjs';
 import {inspectCandidate} from './release-candidate.mjs';
-import {INSTALLED_CANDIDATE_PATHS} from './workflow.mjs';
+import {INSTALLED_CANDIDATE_PATHS, releaseQualificationSource} from './workflow.mjs';
 import {LOCAL_COHORTS} from './local.mjs';
 import {ArtifactTransport, digest, ROLES} from './transport.mjs';
 import {execFileSync} from 'node:child_process';
@@ -29,6 +29,46 @@ test('candidate inputs bind control source and require explicit direct relay', (
     assert.throws(()=>candidateInputs({...env,...change}));
   }
 });
+test('release qualification recovery only permits the exact executable installer child', () => {
+  const control = 'b'.repeat(40);
+  const releaseEnv = {...env, GITHUB_SHA: control, GITHUB_REF: 'refs/heads/master',
+    GITHUB_EVENT_NAME: 'workflow_dispatch', RELEASE_GATE: 'true'};
+  const bootstrap = Buffer.from('#!/bin/sh\n');
+  const replies = {
+    'rev-list': `${control} ${source}\n`,
+    'diff-tree': 'M\tscripts/install.sh\n',
+    'ls-tree': `100755 blob ${source}\tscripts/install.sh\n`,
+    show: bootstrap,
+  };
+  const qualify = (changes = {}, responses = {}, expected = bootstrap) =>
+    releaseQualificationSource({...releaseEnv, ...changes}, {bootstrap: expected,
+      git: ([command]) => Buffer.from({...replies, ...responses}[command])});
+  assert.equal(qualify(), source);
+  assert.equal(releaseQualificationSource(env), source);
+  for (const changes of [{RELEASE_GATE: 'false'}, {GITHUB_REF: 'refs/heads/topic'},
+    {GITHUB_REPOSITORY: 'fork/marmish'}, {GITHUB_EVENT_NAME: 'pull_request'}]) {
+    assert.throws(() => qualify(changes), /invalid_candidate_source/);
+  }
+  for (const responses of [
+    {'rev-list': `${control} ${source} ${'c'.repeat(40)}\n`},
+    {'rev-list': `${control} ${'c'.repeat(40)}\n`},
+    {'diff-tree': 'M\tscripts/install.sh\nM\tREADME.md\n'},
+    {'diff-tree': 'A\tscripts/install.sh\n'},
+    {'ls-tree': `120000 blob ${source}\tscripts/install.sh\n`},
+  ]) assert.throws(() => qualify({}, responses), /qualification_source_changed/);
+  assert.throws(() => qualify({}, {}, Buffer.from('different')), /qualification_bootstrap_mismatch/);
+});
+
+test('release qualification accepts only an ordinary candidate with the exact source', async () => {
+  const validate = (data) => validateCandidate({...env, RELEASE_GATE: 'true'}, 0, {
+    request: async () => ({bytes: Buffer.from(JSON.stringify(data))}),
+    list: async () => assert.fail('artifact listing must follow a valid run'),
+  });
+  await assert.rejects(validate(run), /invalid_candidate_provenance/);
+  await assert.rejects(validate({...run, head_sha: source, path: INSTALLED_CANDIDATE_PATHS[1]}),
+    /invalid_candidate_provenance/);
+});
+
 test('exact candidate attempt and workflow required; dispatch head is not selected source', () => {
   const c=candidateInputs(env);
   for (const event of ['workflow_dispatch','push']) checkRun({...run,event},c);

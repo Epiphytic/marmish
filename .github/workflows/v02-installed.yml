@@ -24,13 +24,34 @@ on:
         description: Explicit direct wss relay URL
         required: true
         type: string
+  workflow_call:
+    inputs:
+      cohort:
+        type: string
+        required: true
+      candidate_run_id:
+        type: string
+        required: true
+      candidate_run_attempt:
+        type: string
+        required: true
+      source_commit:
+        type: string
+        required: true
+      relay:
+        type: string
+        required: true
+      release_gate:
+        type: boolean
+        required: true
 permissions:
   contents: read
   actions: read
 concurrency:
-  group: marmish-v02-installed
+  group: ${{ inputs.release_gate && format('marmish-release-benchmark-{0}-{1}-{2}', github.run_id, github.run_attempt, inputs.cohort) || 'marmish-v02-installed' }}
   cancel-in-progress: false
 env:
+  RELEASE_GATE: ${{ inputs.release_gate }}
   CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
   CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_run_attempt }}
   SOURCE_COMMIT: ${{ inputs.source_commit }}
@@ -44,6 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install locked build-only coordinator dependencies
@@ -83,7 +105,7 @@ jobs:
         run: node tools/v02-actions/workflow.mjs resolve
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/resolve/output/context.json
           if-no-files-found: error
           retention-days: 14
@@ -122,6 +144,7 @@ jobs:
           echo "MARMISH_WORK=$parent/work" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install locked build-only coordinator dependencies
@@ -129,7 +152,7 @@ jobs:
         run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/context
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -185,7 +208,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: v02-installed-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.role }}
+          name: v02-installed-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}-${{ matrix.role }}
           path: |
             ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-identity-ready.json
             ${{ env.MARMISH_WORK }}/output/${{ matrix.role }}-server-ready.json
@@ -211,6 +234,7 @@ jobs:
           echo "RECORDS_ROOT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install locked build-only coordinator dependencies
@@ -218,7 +242,7 @@ jobs:
         run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/context
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -248,7 +272,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: v02-installed-rollup-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-rollup-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/rollup/matrix-rollup.*
           if-no-files-found: error
           retention-days: 14
@@ -290,6 +314,7 @@ jobs:
           echo "MARMISH_WORK=$parent/work" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install locked build-only coordinator dependencies
@@ -297,7 +322,7 @@ jobs:
         run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/context
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -357,6 +382,7 @@ jobs:
           echo "LOCAL_RECORDS_FLAT=$RUNNER_TEMP/records" >> "$GITHUB_ENV"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - name: Install locked build-only coordinator dependencies
@@ -364,7 +390,7 @@ jobs:
         run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: v02-installed-context-${{ github.run_id }}-${{ github.run_attempt }}${{ inputs.release_gate && format('-{0}', inputs.cohort) || '' }}
           path: ${{ runner.temp }}/context
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:

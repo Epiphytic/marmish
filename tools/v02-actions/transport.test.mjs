@@ -328,6 +328,85 @@ test('list validates fatal shapes and bounds without retrying or accepting parti
   }
 });
 
+const paginatedEntries = count => Array.from({length: count}, (_, index) => ({
+  id: index + 1, name: `qualification-${index + 1}`,
+}));
+
+test('release listing returns complete snapshots within five authenticated pages', async t => {
+  const directory = await temporary(t);
+  for (const count of [0, 100, 113, 500]) {
+    const entries = paginatedEntries(count);
+    const pages = [];
+    const transport = new ArtifactTransport({context, token: 'x', paginate: true,
+      budgetFile: path.join(directory, `budget-${count}`), fetcher: async (url, {headers}) => {
+        assert.equal(headers.Authorization, 'Bearer x');
+        const query = new URL(url).searchParams;
+        assert.equal(query.get('per_page'), '100');
+        const page = Number(query.get('page'));
+        pages.push(page);
+        return Response.json({total_count: count, artifacts: entries.slice((page - 1) * 100, page * 100)});
+      }});
+    assert.deepEqual(await transport.list(Date.now() + 30_000), entries);
+    assert.deepEqual(pages, Array.from({length: Math.max(1, Math.ceil(count / 100))}, (_, index) => index + 1));
+  }
+});
+
+test('release listing classifies malformed pages and discards inconsistent snapshots', async t => {
+  const directory = await temporary(t);
+  const entries = paginatedEntries(102);
+  const first = entries.slice(0, 100);
+  const cases = [
+    {firstTotal: 501, message: 'artifact_list_total'},
+    {firstPage: first.slice(0, 99), message: 'artifact_retry'},
+    {lastTotal: 103, message: 'artifact_retry'},
+    {lastPage: [entries[100]], message: 'artifact_retry'},
+    {lastPage: [entries[99], entries[100]], message: 'artifact_retry'},
+    {lastPage: [entries[100], entries[100]], message: 'artifact_duplicate'},
+    {lastPage: [{...entries[100], name: entries[99].name}, entries[101]], message: 'artifact_duplicate'},
+    {lastPage: [{...entries[100], id: entries[99].id}, entries[101]], message: 'artifact_duplicate'},
+    {lastPage: [null, entries[101]], message: 'artifact_metadata'},
+    {lastPage: [{id: 101, name: ''}, entries[101]], message: 'artifact_metadata'},
+  ];
+  for (const [index, {firstTotal = 102, firstPage = first, lastTotal = 102,
+    lastPage = entries.slice(100), message}] of cases.entries()) {
+    const transport = new ArtifactTransport({context, token: 'x', paginate: true,
+      budgetFile: path.join(directory, `budget-${index}`), fetcher: async url =>
+        new URL(url).searchParams.get('page') === '1'
+          ? Response.json({total_count: firstTotal, artifacts: firstPage})
+          : Response.json({total_count: lastTotal, artifacts: lastPage})});
+    await assert.rejects(transport.list(Date.now() + 30_000), error => {
+      assert.equal(error.message, message);
+      if (message === 'artifact_retry') {
+        assert.equal(error.artifactList.reason, 'count_mismatch');
+        assert.equal(error.retryAfter, 30_000);
+      }
+      return true;
+    });
+  }
+});
+
+test('release listing retries from page one using the same persisted API budget', async t => {
+  const directory = await temporary(t);
+  const budgetFile = path.join(directory, 'budget');
+  await fs.writeFile(budgetFile, '{"used":117}');
+  const entries = paginatedEntries(102), pages = [];
+  const transport = new ArtifactTransport({context, token: 'x', paginate: true, budgetFile,
+    fetcher: async url => {
+      const page = Number(new URL(url).searchParams.get('page'));
+      pages.push(page);
+      return Response.json(page === 1 ? {total_count: 102, artifacts: entries.slice(0, 100)}
+        : {total_count: 103, artifacts: entries.slice(99)});
+    }});
+  const deadline = Date.now() + 30_000;
+  await assert.rejects(transport.list(deadline), {message: 'artifact_retry'});
+  await assert.rejects(transport.list(deadline), {message: 'artifact_budget'});
+  assert.deepEqual(pages, [1, 2, 1]);
+  assert.equal(JSON.parse(await fs.readFile(budgetFile)).used, 120);
+  const restarted = new ArtifactTransport({context, token: 'x', paginate: true, budgetFile,
+    fetcher: async () => assert.fail('persisted budget must prevent another fetch')});
+  await assert.rejects(restarted.list(deadline), {message: 'artifact_budget'});
+});
+
 // Exercise actual listing, authenticated downloads and immutable inbox writes;
 // only GitHub/blob HTTP and the passage of time are deterministic fixtures.
 async function listExchange(t, snapshots, used = 0, zip404s = 0) {

@@ -104,10 +104,10 @@ The public installer remains pinned to 0.3.0 until trusted publication creates
 its installer-only child. Earlier `11e93a1` candidate/preflight evidence is not
 qualification of future 0.3.1 bytes. [macOS preflight](validation/v0.3.1-preflight.md)
 passed the original combined suites, 80 repetitions and strict release Clippy;
-the historical first-TERM cause remains unknown. Final source-bound candidate,
-macOS regression, eight cohorts, finite benchmarks and independent audits remain
-required. Hold automatic publication with an explicit restoration duty before
-pushing the version bump, because the publisher does not gate these cohorts.
+the historical first-TERM cause remains unknown. The [automatic release pipeline](phases/automatic-release-gate.md) requires a
+fresh exact-source candidate, eight live installed cohorts and the finite command
+benchmark before GitHub Release publication. Its independent macOS regression
+workflow remains available alongside the mandatory ordinary native macOS checks.
 No new rollback or lifecycle claim is made. Keep published 0.3.0 immutable.
 
 Candidate [42614762310](https://github.com/Epiphytic/marmish/actions/runs/42614762310),

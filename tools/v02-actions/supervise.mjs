@@ -232,7 +232,8 @@ async function mainOwned(env, diagnostic) {
   process.on('SIGTERM', cancel);
   try {
     const transport = new ArtifactTransport({context, token,
-      budgetFile: path.join(options.workspace, '.actions-budget.json')});
+      budgetFile: path.join(options.workspace, '.actions-budget.json'),
+      paginate: env.RELEASE_GATE === 'true'});
     await supervise({options, context, transport, artifact: new BoundedArtifactClient(), signal: controller.signal, diagnosticState: diagnostic});
   } catch (error) {
     diagnostic.failed(error);
