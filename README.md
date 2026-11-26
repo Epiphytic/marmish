@@ -4,37 +4,16 @@ Run remote commands over Marmot's MLS-encrypted Nostr transport. Marmish uses
 native Rust clients and daemons, with one named Nostr identity per daemon.
 The same identity can send commands and accept authorized commands.
 
-**[v0.3.0 is published](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0)**
-as an explicitly caveated GitHub prerelease, not marked latest,
-for Linux AMD64, Linux ARM64 and macOS Apple Silicon. The installer selects
-**0.3.0**, adding binary streaming, rsync remote-shell operation, resumable
-regular-file copy, optional compression and explicit stream cancellation.
-Both peers need v0.3 for the new commands; native copy requires the exact same
-version. Check `marmish --version` before using them.
+**[Download Marmish v0.3.1](https://github.com/Epiphytic/marmish/releases/tag/v0.3.1)**
+for Linux AMD64, Linux ARM64 and macOS Apple Silicon. v0.3 supports binary
+streaming, rsync remote-shell operation, resumable regular-file copy, optional
+compression and explicit stream cancellation. Both peers need v0.3 for these
+commands. For native copy, both peers need the same exact version.
 
-The pre-release source (carrying version 0.2.3) passed installed three-platform stream, rsync and copy
-matrices plus streaming and rsync edge cohorts. The copy edge cohort failed on
-all three platforms; the two copy-interruption cohorts were not dispatched.
-These source-build observations are not tests of released v0.3.0 binary bytes.
-This is **incomplete qualification**, disclosed for the user-authorized release.
-A separate macOS native cleanup test also failed with `RecoveryUncertain` on
-its first TERM attempt; its cause remains unresolved. Interactive macOS Keychain
-consent remains unverified and Tor is experimental.
-See [v0.3 release status and measured results](docs/validation/v0.3-release.md).
-The [operation benchmark guide](docs/validation/v0.3-operation-benchmarks.md)
-defines reproducible workloads and timing boundaries. New [C2 measurements](docs/validation/v0.3.1-c2-benchmarks.md)
-contain 45 source-bound operation observations; [C2 qualification](docs/validation/v0.3.1-c2-validation.md)
-failed in the interrupted-copy cohort. These are candidate results,
-not tests of released v0.3.0 bytes.
-
-**v0.3.1 is in preparation, not published.** It retains the copy refusal-test
-correction and debug-only cleanup diagnostics. The [automatic release pipeline](docs/phases/automatic-release-gate.md)
-requires a fresh versioned candidate, all eight installed streaming and transfer
-cohorts, and a finite benchmark before publishing a GitHub Release. The
-installer still selects 0.3.0.
-The [macOS preflight](docs/validation/v0.3.1-preflight.md) passed the combined
-native suites, 80 cleanup repetitions and strict release Clippy at `11e93a1`;
-this is bounded non-reproduction, not a fix for the historical first-TERM cause.
+v0.3.1 passed all eight live transfer cohorts and the finite command benchmark.
+See [validation and benchmarks](docs/validation/v0.3.1-release.md) for the
+results and [v0.3.0 release evidence](docs/validation/v0.3-release.md) for the
+earlier prerelease.
 
 Source: [GitHub](https://github.com/Epiphytic/marmish) ·
 [Radicle](https://radicle.network/nodes/iris.radicle.network/rad:z3x7GVHywRtV2nR9qA5V4VqAVvCDg)
@@ -55,9 +34,9 @@ If Iris is unavailable, the same installer is available independently on GitHub:
 curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/Epiphytic/marmish/master/scripts/install.sh | sh -s -- --quickstart --debug
 ```
 
-The installer pins v0.3.0 and verifies its manifest and binary checksums.
+The installer pins v0.3.1 and verifies its manifest and binary checksums.
 The Iris and GitHub URLs are independent script sources; versioned binary assets
-are downloaded from GitHub Releases. The [public HTTPS installer run](https://github.com/Epiphytic/marmish/actions/runs/42557032770)
+are downloaded from GitHub Releases. The [public HTTPS installer run](https://github.com/Epiphytic/marmish/actions/runs/45729584608)
 passed all six GitHub/Iris × platform quickstart installations and its combined
 validation. These checks use file-backed test identities; interactive Keychain
 consent remains unverified. See [Scope and validation](#scope-and-validation)
@@ -68,7 +47,7 @@ The native 0.2.1 installer adds automatic upgrades of recognized v0.1 installer
 launchers. It verifies the old marker and exact wrappers, replaces the launchers,
 and retains the old runtime and launcher backups; private state is unchanged.
 Unrelated programs are refused rather than overwritten. Interrupted upgrades
-recover on the next installer invocation. The public bootstrap above selects the matching 0.3.0 assets.
+recover on the next installer invocation.
 
 Supported binaries are Linux AMD64 and ARM64 (glibc 2.39 or newer), and macOS 15
 or newer on Apple Silicon. Use a native ARM64 terminal on macOS. The macOS
@@ -455,8 +434,10 @@ expiry is not a guarantee that every relay or backup erases a message.
 
 The v0.3 implementation provides noninteractive remote execution, durable command
 recovery, binary streams, rsync remote-shell operation, resumable single-file
-copy, compression and explicit cancellation. Qualification remains incomplete
-as described in [the release evidence](docs/validation/v0.3-release.md).
+copy, compression and explicit cancellation. See the [v0.3.1 qualification and measurements](docs/validation/v0.3.1-release.md)
+for the tested configurations.
+The cause of the historical macOS first-TERM `RecoveryUncertain` failure remains
+unknown. [macOS preflight](docs/validation/v0.3.1-preflight.md)
 Interactive terminals, tmux attachment, X11 and port forwarding remain future
 work. Embedded Arti/Tor is experimental and has no qualified command-transport
 claim in this release. There is no process or directory sandbox.
@@ -535,21 +516,15 @@ never change format markers to force access.
 
 ## Release process
 
-Releases require an explicit reviewed native Cargo version bump. The new GitHub
-workflow runs the full three-platform candidate checks before publishing
-immutable assets and updating the installer. It does not infer version numbers
-from commit messages. v0.3.0 was manually published under the explicit,
-reviewed [publication amendment](docs/phases/v0.3-caveated-publication.md), using
-three-platform caveated packaging that skipped native tests/Clippy,
-installed-feature tools and provider/quickstart prequalification. The ordinary
-automatic publisher rejects caveated candidates. These skipped checks and the
-failed macOS cleanup and copy-edge tests remain disclosed; earlier passing
-source qualification does not establish full qualification of the new release.
-Subsequent runtime corrections require a new patch release.
+An explicit, reviewed native Cargo version bump on `master` starts candidate
+builds on all three platforms. The publisher requires candidate checks,
+eight installed end-to-end test cohorts, the finite command benchmark and
+artifact verification. It then publishes the GitHub Release with the verified
+binary assets and updates the installer. Stable versions become the latest
+release. Release candidates remain prereleases.
 
-Binary releases are hosted on GitHub. Source branches and tags are also mirrored
-to Radicle/Iris separately; GitHub Actions does not publish Radicle releases.
-See [the release design](docs/phases/native-automatic-release.md) for gates and
+Source branches and tags are mirrored separately to Radicle and Iris. See the
+[automatic release design](docs/phases/automatic-release-gate.md) for gates and
 same-source recovery rules.
 
 ## Acknowledgments

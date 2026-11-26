@@ -16,10 +16,18 @@ release qualification. Native builds must retain the Linux glibc2.39 baseline,
 macOS keychain isolation and all acceptance checks. Full nine-pair live transfer
 qualification currently needs capacity beyond the shared laptop ARM64 slot.
 
-**[v0.3.0 is published](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0).**
+**[v0.3.1 is the current release](https://github.com/Epiphytic/marmish/releases/tag/v0.3.1).**
+The public installer selects v0.3.1. The exact installed archives passed the
+eight transfer cohorts and finite command benchmark. Both public installer URLs
+passed install and quickstart on all three platforms. See the
+[v0.3.1 evidence](validation/v0.3.1-release.md) for the exact artifact sources,
+timings and scope. An explicit stable native version bump on `master` takes the
+same path through the [automatic release gate](phases/automatic-release-gate.md).
+
+**Historical [v0.3.0 prerelease](https://github.com/Epiphytic/marmish/releases/tag/v0.3.0).**
 The reviewed [publication amendment](phases/v0.3-caveated-publication.md) permits
 this explicitly caveated release of the existing streaming, rsync and native
-copy behavior. Public installation selects v0.3.0. Both peers need v0.3 for the
+copy behavior. Both peers need v0.3 for the
 new commands, and native copy requires an exact peer version match.
 Release source is `72d730f0f99e5029ffcf6e4d83086da2c598fc0c`; annotated tag object
 is `f68b659443e9bbfa5dc3c012599add4e6811b838`. Caveated candidate
@@ -43,15 +51,14 @@ The reviewed [post-release test phase](phases/v0.3-test-cleanup.md) addresses co
 refusal evidence and fresh qualification. Its [benchmark guide](validation/v0.3-operation-benchmarks.md)
 defines existing operation clocks and byte numerators; it does not claim new results.
 
-## Pending v0.3.1 patch
+## v0.3.1 qualification history
 
 The `4fcb107` qualification chain failed at a listed identity artifact ZIP API404
 in [edge-stream 42744796757](https://github.com/Epiphytic/marmish/actions/runs/42744796757),
 attempt 1, before server enable on AMD. The backend/visibility cause remains
 unknown. The [listed-artifact retry phase](phases/v0.3.1-listed-artifact-retry.md)
 adds supervisor-only bounded retries for that narrow HTTP outcome; gather,
-listing and blob failures retain hard behavior. Fresh source-bound qualification
-is pending; this correction does not qualify the failed source or publish 0.3.1.
+listing and blob failures retain hard behavior. That run remained unqualified.
 
 The subsequent [CI report collection increment](phases/ci-report-gather.md)
 extends bounded transient retries to the rollup collector, within its original
@@ -100,9 +107,9 @@ described below. Product-source cleanup diagnostics are retained,
 while ordinary release binaries omit their debug emission. The copy refusal
 validator and legacy uninstall changes correct test evidence and fixtures.
 
-The public installer remains pinned to 0.3.0 until trusted publication creates
-its installer-only child. Earlier `11e93a1` candidate/preflight evidence is not
-qualification of future 0.3.1 bytes. [macOS preflight](validation/v0.3.1-preflight.md)
+The public installer was pinned to 0.3.0 until the v0.3.1 cutover. Earlier
+`11e93a1` candidate and preflight evidence applies to that source.
+[macOS preflight](validation/v0.3.1-preflight.md)
 passed the original combined suites, 80 repetitions and strict release Clippy;
 the historical first-TERM cause remains unknown. The [automatic release pipeline](phases/automatic-release-gate.md) requires a
 fresh exact-source candidate, eight live installed cohorts and the finite command
@@ -164,8 +171,7 @@ retained, so the failing list predicate remains unknown. Final native semantic
 replay, interruption cohorts and finite benchmarks did not execute. The
 [artifact-list amendment](phases/v0.3.1-release.md#artifact-list-coordination-amendment)
 records bounded CI transport handling and diagnostic changes; it requires fresh
-source-bound qualification rather than reusing those partial results. Version
-0.3.1 remains unpublished and the public installer still selects 0.3.0.
+source-bound qualification rather than reusing those partial results.
 
 The retained Python reference and installed-test harness support Linux managed
 interpreters lacking Python's pidfd APIs through checked libc bindings. Each
@@ -274,11 +280,10 @@ hosted interruption subcall remains unknown. A separate real Journal test confir
 the production Busy refusal contract; source inspection establishes that the
 fixture's admitted-helper expectation contradicts that contract. The [admission-proof correction](phases/installed-put-admission-proof.md)
 changes installed-test evidence only and needs fresh source-bound qualification.
-No C2 measurement qualifies rebuilt later-source artifacts. Public v0.3.0 and
-the installer default remain unchanged; v0.3.1 remains unpublished.
+C2 measurements apply to the C2 candidate source.
 
 The following increment history preserves each result's original scope; the
-[current release summary](validation/v0.3-release.md) supersedes statements
+[v0.3.0 release summary](validation/v0.3-release.md) supersedes statements
 that installed positive matrices are still pending, without erasing failures.
 
 The [streaming plan](phases/streaming-transfer-plan.md) adds a separate bounded
@@ -816,10 +821,11 @@ force acceptance. Runtime requires the installed sibling marmish-worker.
 
 The release bootstrap is served byte-for-byte from Radicle/Iris and GitHub,
 with GitHub the independent script backup. Both routes download GitHub-hosted
-release assets. The current v0.3.0 bootstrap SHA256 is
+release assets. The v0.3.0 bootstrap SHA256 was
 `d766bf1078de5f721c97e79ee7af675bd2d8b2cbcdedb88195087050c288d16b`;
 both public routes matched it and passed all six install/setup checks in
-run 42557032770 attempt 1. The historical v0.2.3 results remain in
+run 42557032770 attempt 1. The [v0.3.1 release evidence](validation/v0.3.1-release.md)
+records the current bootstrap and installation results. The historical v0.2.3 results remain in
 [earlier evidence](validation/native-automatic-release.md). Source replication,
 HTTPS delivery and installed behavior remain separately recorded observations.
 
@@ -1264,8 +1270,8 @@ pending or failed cleanup cannot authorize reaping or a new KILL attempt.
 Ordinary signal completion still requires the existing exit/drain conditions.
 Strict finite-worker and destructor signal paths retain their prior behavior.
 Local Linux tests cover portable state and deadline behavior; Darwin execution
-and fresh complete release qualification remain required. This does not explain
-every historical macOS failure or qualify unpublished version 0.3.1.
+and fresh qualification were required at this stage. Historical macOS failures
+retain their original test results.
 
 The temporary [confidential legacy diagnostic](phases/legacy-confidential-trace.md)
 is retired after accepted source `2b951ae` passed all six ordinary legacy jobs

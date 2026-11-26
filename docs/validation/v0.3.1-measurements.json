@@ -1,0 +1,593 @@
+{
+  "version": "0.3.1",
+  "source": "b666ae6aaa6063b1b30317d43fdb86bca3e4ec95",
+  "candidate_run": 45713733794,
+  "candidate_attempt": 1,
+  "qualification_run": 45723799364,
+  "qualification_attempt": 1,
+  "relay": "wss://relay.eu.whitenoise.chat/",
+  "transfer_cohorts": [
+    {
+      "cohort": "copy-interrupt-get",
+      "artifact": "v02-installed-rollup-45723799364-1-copy-interrupt-get",
+      "report_sha256": "fd73560640ee1eda6151eb05875744f39998b461458c5182c4e24e90282083a8",
+      "passing_cases": 3,
+      "samples": [
+        {
+          "case": "copy-interrupt-get",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 1310720,
+          "wall_ns": 199862871534,
+          "payload_bytes_per_second": 6558.096508570501,
+          "resume_payload_bytes": 1278004,
+          "resume_wall_ns": 184323263275,
+          "resume_payload_bytes_per_second": 6933.492698061066
+        },
+        {
+          "case": "copy-interrupt-get",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 1310720,
+          "wall_ns": 176016616122,
+          "payload_bytes_per_second": 7446.569698235299,
+          "resume_payload_bytes": 1269825,
+          "resume_wall_ns": 162185280566,
+          "resume_payload_bytes_per_second": 7829.471303243545
+        },
+        {
+          "case": "copy-interrupt-get",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 1310720,
+          "wall_ns": 165940635000,
+          "payload_bytes_per_second": 7898.728361501087,
+          "resume_payload_bytes": 1269825,
+          "resume_wall_ns": 151677825208,
+          "resume_payload_bytes_per_second": 8371.856586542257
+        }
+      ]
+    },
+    {
+      "cohort": "copy-interrupt-put",
+      "artifact": "v02-installed-rollup-45723799364-1-copy-interrupt-put",
+      "report_sha256": "95e4126c041193ec5d87a04c2d41708656bc4b96af31594e26da91d513998b0f",
+      "passing_cases": 3,
+      "samples": [
+        {
+          "case": "copy-interrupt-put",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 1310720,
+          "wall_ns": 119157622709,
+          "payload_bytes_per_second": 10999.883769089336,
+          "resume_payload_bytes": 1253467,
+          "resume_wall_ns": 108034644993,
+          "resume_payload_bytes_per_second": 11602.454009833764
+        },
+        {
+          "case": "copy-interrupt-put",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 1310720,
+          "wall_ns": 129464633296,
+          "payload_bytes_per_second": 10124.154887947276,
+          "resume_payload_bytes": 1253467,
+          "resume_wall_ns": 118841381128,
+          "resume_payload_bytes_per_second": 10547.395091697339
+        },
+        {
+          "case": "copy-interrupt-put",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 1310720,
+          "wall_ns": 121213336584,
+          "payload_bytes_per_second": 10813.331576692306,
+          "resume_payload_bytes": 1261646,
+          "resume_wall_ns": 109987166083,
+          "resume_payload_bytes_per_second": 11470.847417306122
+        }
+      ]
+    },
+    {
+      "cohort": "copy-matrix",
+      "artifact": "v02-installed-rollup-45723799364-1-copy-matrix",
+      "report_sha256": "ee62a462ffb58ee4e282a7cd01c27ea2d7b6dcb15b15c24ed5018f23b1166a6f",
+      "passing_cases": 18,
+      "samples": [
+        {
+          "case": "put",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 25386261292,
+          "payload_bytes_per_second": 2581.5538273314955
+        },
+        {
+          "case": "get",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 38248923310,
+          "payload_bytes_per_second": 1713.4077074233858
+        },
+        {
+          "case": "put",
+          "client": "linux-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 28881312179,
+          "payload_bytes_per_second": 2269.1489775056734
+        },
+        {
+          "case": "get",
+          "client": "linux-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 39233530547,
+          "payload_bytes_per_second": 1670.4079160423971
+        },
+        {
+          "case": "put",
+          "client": "macos-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 24641679417,
+          "payload_bytes_per_second": 2659.5589890998863
+        },
+        {
+          "case": "get",
+          "client": "macos-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 65536,
+          "wall_ns": 40365075875,
+          "payload_bytes_per_second": 1623.5817369190067
+        },
+        {
+          "case": "put",
+          "client": "linux-amd64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 27739960944,
+          "payload_bytes_per_second": 2362.5123385105226
+        },
+        {
+          "case": "get",
+          "client": "linux-amd64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 42260680845,
+          "payload_bytes_per_second": 1550.7558962518176
+        },
+        {
+          "case": "put",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 30747137522,
+          "payload_bytes_per_second": 2131.4504465044297
+        },
+        {
+          "case": "get",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 43560950326,
+          "payload_bytes_per_second": 1504.466718690567
+        },
+        {
+          "case": "put",
+          "client": "macos-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 28448701042,
+          "payload_bytes_per_second": 2303.6552671858894
+        },
+        {
+          "case": "get",
+          "client": "macos-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 46847402958,
+          "payload_bytes_per_second": 1398.9249320555687
+        },
+        {
+          "case": "put",
+          "client": "linux-amd64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 23328780598,
+          "payload_bytes_per_second": 2809.2338442078053
+        },
+        {
+          "case": "get",
+          "client": "linux-amd64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 33994382719,
+          "payload_bytes_per_second": 1927.8479195143875
+        },
+        {
+          "case": "put",
+          "client": "linux-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 27112353744,
+          "payload_bytes_per_second": 2417.2006834523986
+        },
+        {
+          "case": "get",
+          "client": "linux-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 33308456623,
+          "payload_bytes_per_second": 1967.5483839364201
+        },
+        {
+          "case": "put",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 26837372375,
+          "payload_bytes_per_second": 2441.9678306900564
+        },
+        {
+          "case": "get",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 65536,
+          "wall_ns": 32629639500,
+          "payload_bytes_per_second": 2008.480663722932
+        }
+      ]
+    },
+    {
+      "cohort": "edge-copy",
+      "artifact": "v02-installed-rollup-45723799364-1-edge-copy",
+      "report_sha256": "e7ff809d2842134e0af9c65db313a5e609d59ba7cf613218e1864a90c085fec8",
+      "passing_cases": 66
+    },
+    {
+      "cohort": "edge-rsync",
+      "artifact": "v02-installed-rollup-45723799364-1-edge-rsync",
+      "report_sha256": "d4d7e4a6243c9be14880cec88243db1277345076383003c057611d9b4a5b63d2",
+      "passing_cases": 18
+    },
+    {
+      "cohort": "edge-stream",
+      "artifact": "v02-installed-rollup-45723799364-1-edge-stream",
+      "report_sha256": "5f99ca2517d4a6cdfbf45a61be9f7bf62103ff435c78dcba72808475e530b60b",
+      "passing_cases": 27
+    },
+    {
+      "cohort": "rsync-matrix",
+      "artifact": "v02-installed-rollup-45723799364-1-rsync-matrix",
+      "report_sha256": "bdb65c4966a6794a750b181c7d2423e849fe285b4f6c10201244a21dfeabd5c4",
+      "passing_cases": 18,
+      "samples": [
+        {
+          "case": "push",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 28624103514,
+          "payload_bytes_per_second": 1144.7694766745526
+        },
+        {
+          "case": "pull",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 30361453664,
+          "payload_bytes_per_second": 1079.2632119210245
+        },
+        {
+          "case": "push",
+          "client": "linux-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 47257841114,
+          "payload_bytes_per_second": 693.3875781789061
+        },
+        {
+          "case": "pull",
+          "client": "linux-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 36264711884,
+          "payload_bytes_per_second": 903.5781148576352
+        },
+        {
+          "case": "push",
+          "client": "macos-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 28025802125,
+          "payload_bytes_per_second": 1169.208283632667
+        },
+        {
+          "case": "pull",
+          "client": "macos-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 32768,
+          "wall_ns": 31219755208,
+          "payload_bytes_per_second": 1049.5918299706357
+        },
+        {
+          "case": "push",
+          "client": "linux-amd64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 33146469700,
+          "payload_bytes_per_second": 988.581900171408
+        },
+        {
+          "case": "pull",
+          "client": "linux-amd64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 47947887318,
+          "payload_bytes_per_second": 683.4086303464437
+        },
+        {
+          "case": "push",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 45556807752,
+          "payload_bytes_per_second": 719.2777900150707
+        },
+        {
+          "case": "pull",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 49697767160,
+          "payload_bytes_per_second": 659.3455173650904
+        },
+        {
+          "case": "push",
+          "client": "macos-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 31067433667,
+          "payload_bytes_per_second": 1054.7379082298114
+        },
+        {
+          "case": "pull",
+          "client": "macos-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 45685734958,
+          "payload_bytes_per_second": 717.2479556282593
+        },
+        {
+          "case": "push",
+          "client": "linux-amd64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 27957047513,
+          "payload_bytes_per_second": 1172.0837110844022
+        },
+        {
+          "case": "pull",
+          "client": "linux-amd64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 29805115008,
+          "payload_bytes_per_second": 1099.408607925342
+        },
+        {
+          "case": "push",
+          "client": "linux-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 43061685091,
+          "payload_bytes_per_second": 760.9548936775954
+        },
+        {
+          "case": "pull",
+          "client": "linux-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 36630979799,
+          "payload_bytes_per_second": 894.5433668387583
+        },
+        {
+          "case": "push",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 27998965542,
+          "payload_bytes_per_second": 1170.3289520052513
+        },
+        {
+          "case": "pull",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 32768,
+          "wall_ns": 28868237375,
+          "payload_bytes_per_second": 1135.0883524456956
+        }
+      ]
+    },
+    {
+      "cohort": "stream-matrix",
+      "artifact": "v02-installed-rollup-45723799364-1-stream-matrix",
+      "report_sha256": "8ba1ea4cc3410b10955f453950daf9da3d010e7811e21db17ca006d5ffd44e01",
+      "passing_cases": 9,
+      "samples": [
+        {
+          "case": "duplex",
+          "client": "linux-amd64",
+          "server": "linux-amd64",
+          "payload_bytes": 204800,
+          "wall_ns": 42437242360,
+          "payload_bytes_per_second": 4825.949769842679
+        },
+        {
+          "case": "duplex",
+          "client": "linux-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 204800,
+          "wall_ns": 43079119072,
+          "payload_bytes_per_second": 4754.043360490006
+        },
+        {
+          "case": "duplex",
+          "client": "macos-arm64",
+          "server": "linux-amd64",
+          "payload_bytes": 204800,
+          "wall_ns": 38789749208,
+          "payload_bytes_per_second": 5279.745401338198
+        },
+        {
+          "case": "duplex",
+          "client": "linux-amd64",
+          "server": "linux-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 42054908107,
+          "payload_bytes_per_second": 4869.823980566759
+        },
+        {
+          "case": "duplex",
+          "client": "linux-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 42419899638,
+          "payload_bytes_per_second": 4827.9227850067555
+        },
+        {
+          "case": "duplex",
+          "client": "macos-arm64",
+          "server": "linux-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 38694172750,
+          "payload_bytes_per_second": 5292.786625086848
+        },
+        {
+          "case": "duplex",
+          "client": "linux-amd64",
+          "server": "macos-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 40100918439,
+          "payload_bytes_per_second": 5107.114948290624
+        },
+        {
+          "case": "duplex",
+          "client": "linux-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 39661019834,
+          "payload_bytes_per_second": 5163.760308161117
+        },
+        {
+          "case": "duplex",
+          "client": "macos-arm64",
+          "server": "macos-arm64",
+          "payload_bytes": 204800,
+          "wall_ns": 34804842291,
+          "payload_bytes_per_second": 5884.238701261352
+        }
+      ]
+    }
+  ],
+  "finite_command": [
+    {
+      "platform": "linux-amd64",
+      "artifact": "v02-installed-benchmark-linux-amd64-45723799364-1",
+      "report_sha256": "2f4d5792d333bc0a1b798cd7558eb5e722380af9efd8fc2a059d00418801e502",
+      "output_payload_bytes": 262144,
+      "samples": [
+        {
+          "index": 0,
+          "temperature": "cold",
+          "wall_ns": 33578708424,
+          "goodput_bytes_per_second": 7806.8517910187265
+        },
+        {
+          "index": 1,
+          "temperature": "warm",
+          "wall_ns": 34165780012,
+          "goodput_bytes_per_second": 7672.706430467196
+        },
+        {
+          "index": 2,
+          "temperature": "warm",
+          "wall_ns": 34099551050,
+          "goodput_bytes_per_second": 7687.608544042693
+        },
+        {
+          "index": 3,
+          "temperature": "warm",
+          "wall_ns": 32242886267,
+          "goodput_bytes_per_second": 8130.289510350057
+        }
+      ]
+    },
+    {
+      "platform": "linux-arm64",
+      "artifact": "v02-installed-benchmark-linux-arm64-45723799364-1",
+      "report_sha256": "b76fea777a15d7d046ddcbbacfe5308ca218ed5a0f64535c5bc4c198b3d45d75",
+      "output_payload_bytes": 262144,
+      "samples": [
+        {
+          "index": 0,
+          "temperature": "cold",
+          "wall_ns": 35704461720,
+          "goodput_bytes_per_second": 7342.051591640688
+        },
+        {
+          "index": 1,
+          "temperature": "warm",
+          "wall_ns": 32270085773,
+          "goodput_bytes_per_second": 8123.436728492764
+        },
+        {
+          "index": 2,
+          "temperature": "warm",
+          "wall_ns": 30239442728,
+          "goodput_bytes_per_second": 8668.942822721716
+        },
+        {
+          "index": 3,
+          "temperature": "warm",
+          "wall_ns": 33366540630,
+          "goodput_bytes_per_second": 7856.493212973514
+        }
+      ]
+    },
+    {
+      "platform": "macos-arm64",
+      "artifact": "v02-installed-benchmark-macos-arm64-45723799364-1",
+      "report_sha256": "d2d988f6acdc05b406d4fbe467d482db77f764e38c98b93d5dfaa7ddf4f70d4d",
+      "output_payload_bytes": 262144,
+      "samples": [
+        {
+          "index": 0,
+          "temperature": "cold",
+          "wall_ns": 38277265042,
+          "goodput_bytes_per_second": 6848.556178513816
+        },
+        {
+          "index": 1,
+          "temperature": "warm",
+          "wall_ns": 36274173333,
+          "goodput_bytes_per_second": 7226.739465390314
+        },
+        {
+          "index": 2,
+          "temperature": "warm",
+          "wall_ns": 35744087500,
+          "goodput_bytes_per_second": 7333.912216950565
+        },
+        {
+          "index": 3,
+          "temperature": "warm",
+          "wall_ns": 34553489083,
+          "goodput_bytes_per_second": 7586.614462299624
+        }
+      ]
+    }
+  ]
+}

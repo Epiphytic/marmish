@@ -6,8 +6,9 @@ The [automatic release gate](phases/automatic-release-gate.md) binds installed
 end-to-end tests and finite benchmarks on all three platforms to one exact
 candidate attempt. A successful gate publishes a GitHub Release and updates the
 installer. Stable versions become full releases. A failing test prevents
-publication without disabling the workflow. Bootstrap v0.3.1 with a fresh
-candidate, then let subsequent version bumps trigger the same pipeline.
+publication while the workflow stays active.
+[v0.3.1 passed the gate](validation/v0.3.1-release.md) and was published.
+Subsequent version bumps trigger the same pipeline.
 
 ## v0.3 publication, qualification corrections and benchmarks
 
@@ -47,13 +48,13 @@ resume and cancellation timing where actually instrumented, and retained failure
 and cleanup outcomes. Separate setup from steady transfer only with real timing
 boundaries; publish sample counts and raw measurements without inventing RTT,
 wire rate, compression ratios or small-sample tail percentiles. This scope is
-not qualified by the current release. The separate approved
+outside the historical v0.3.0 qualification scope. The separate approved
 [macOS diagnostic increment](phases/v0.3-macos-cleanup-diagnostic.md) preserves
 cleanup decisions while exposing failed proof stages in debug builds; it does
 not establish a root cause or fix. Retained product changes require v0.3.1.
 
-The [v0.3.1 patch plan](phases/v0.3.1-release.md), Beads `marmish-d97`, now
-orders the remaining work: final version and neutral release notes first, then
+The [v0.3.1 patch plan](phases/v0.3.1-release.md), Beads `marmish-d97`,
+originally ordered the work: final version and neutral release notes first, then
 one fresh final candidate, macOS regression, the eight installed cohorts and
 separate finite benchmark, followed by trusted publication and HTTPS installation
 checks. The unlaunched `11e93a1` cohort package is superseded; its 0.3.0 candidate
@@ -139,7 +140,7 @@ criteria. Installed cross-platform qualification remains the following phase. Se
 actual source/platform test boundaries and failures. The current
 [v0.3 summary](validation/v0.3-release.md) records the later positive installed
 matrices and incomplete edge qualification. These increments are absent from
-the historical v0.2.3 release; the public installer now selects v0.3.0.
+the historical v0.2.3 release.
 
 ## Historical v0.1 plans and evidence
 
